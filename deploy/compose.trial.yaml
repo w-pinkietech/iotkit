@@ -79,6 +79,9 @@ services:
       target: trial-runtime
     user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
     restart: unless-stopped
+    # Cleanup is bounded to ten seconds; reserve the remaining five seconds
+    # for runtime teardown before Docker sends SIGKILL.
+    stop_grace_period: 15s
     network_mode: host
     depends_on:
       broker:

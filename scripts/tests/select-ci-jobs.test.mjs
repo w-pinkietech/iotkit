@@ -109,6 +109,11 @@ const cases = [
     expected: rustEdge("iotkit-edge"),
   },
   {
+    name: "Edge Node signal composition selects the PID1 SIGTERM integration gate",
+    paths: ["edge-node/apps/node/src/main.rs"],
+    expected: rustEdge("iotkit-edge-node"),
+  },
+  {
     name: "Output Adapter example focuses example package and Edge integration",
     paths: ["edge/output-adapters/example/src/lib.rs"],
     expected: rustEdge("iotkit-output-adapter-example"),
@@ -162,6 +167,7 @@ const cases = [
       "scripts/test-edge-mqtt.sh",
       "scripts/test-edge-parity.sh",
       "scripts/test-edge-node-fence.sh",
+      "scripts/test-edge-node-sigterm.sh",
       "scripts/test-edge-host-release-gate.sh",
     ],
     expected: rustConsoleEdge("all"),
@@ -324,6 +330,10 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   );
   assert.match(workflow, /node scripts\/product-docs-impact\.mjs soft-check/);
   assert.match(workflow, /Product-docs freshness soft gate/);
+  assert.match(
+    workflow,
+    /node --test scripts\/tests\/rust-edge-release-gates\.test\.mjs/,
+  );
   // Focused package selection drives clippy/nextest when not "all".
   assert.match(workflow, /cargo nextest run/);
   assert.match(workflow, /PACKAGES/);
@@ -359,6 +369,7 @@ test("CI workflow routes heavy jobs through the classifier", () => {
   const edgeSection = edgeJob.split(/^  [a-z]/m)[0] ?? edgeJob;
   assert.match(edgeSection, /scripts\/test-rust-edge-custody\.sh/);
   assert.match(edgeSection, /scripts\/test-edge-output\.sh/);
+  assert.match(edgeSection, /scripts\/test-edge-node-sigterm\.sh/);
   assert.doesNotMatch(
     edgeSection,
     /scripts\/test-edge-console-e2e\.sh/,

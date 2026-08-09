@@ -5,7 +5,7 @@ description: "Loopback限定のIoTKit試用profileを起動、確認、停止、
 language: ja
 translation_key: operations.trial-profile
 status: draft
-revision: 3
+revision: 4
 ---
 
 # このPCでIoTKitを試す
@@ -66,6 +66,9 @@ repository外の`${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial`へowner-only
 ./scripts/iotkit trial down
 ./scripts/iotkit trial up
 ```
+
+`trial down`では、Edge Nodeに15秒のgraceful-stop windowを与えます。pending custody
+recordはdurableのまま後の`up`でretryし、未ack recordをdeliveredとして扱いません。
 
 ## 初期化
 

@@ -25,22 +25,34 @@ fn fan_in_continues_while_restart_notification_is_pending() {
 }
 
 #[test]
-fn run_exit_status_reflects_collector_and_api_failures() {
+fn run_exit_status_reflects_collector_api_mqtt_and_cleanup_failures() {
     assert!(
-        !should_exit_nonzero(true, false, false),
-        "ctrl_c and normal adapter closure should exit successfully"
+        !should_exit_nonzero(true, false, false, true),
+        "requested shutdown and normal adapter closure should exit successfully"
     );
     assert!(
-        should_exit_nonzero(false, false, false),
+        should_exit_nonzero(false, false, false, true),
         "collector death remains fail-fast"
     );
     assert!(
-        should_exit_nonzero(true, true, false),
+        should_exit_nonzero(true, true, false, true),
         "unexpected API task exit in API-only mode should be fail-fast"
     );
     assert!(
-        should_exit_nonzero(true, false, true),
+        should_exit_nonzero(true, false, true, true),
         "unexpected MQTT publisher exit should be fail-fast"
+    );
+    assert!(
+        should_exit_nonzero(true, false, false, false),
+        "a timed-out cleanup must not report a clean shutdown"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_deadline_bounds_a_stuck_cleanup() {
+    assert!(
+        !shutdown_with_timeout(Duration::from_millis(1), std::future::pending()).await,
+        "a stuck cleanup task must not hold the process past its shutdown deadline"
     );
 }
 

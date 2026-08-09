@@ -5,6 +5,7 @@ import test from "node:test";
 const scripts = [
   "verify.sh",
   "test-edge-capacity.sh",
+  "test-edge-node-sigterm.sh",
   "test-edge-postgres.sh",
   "test-edge-output.sh",
   "test-edge-mqtt.sh",
@@ -97,6 +98,27 @@ test("resilience gate supplies identity and checks both SQLite databases", () =>
   assert.match(resilience, /export IOTKIT_EDGE_ID=/);
   assert.match(resilience, /edge_node_check=/);
   assert.match(resilience, /central_edge_check=/);
+});
+
+test("SIGTERM gate runs the Edge Node as the container primary process", () => {
+  const compose = readFileSync(
+    new URL("../../deploy/compose.edge-node-sigterm.yaml", import.meta.url),
+    "utf8",
+  );
+  const trialCompose = readFileSync(
+    new URL("../../deploy/compose.trial.yaml", import.meta.url),
+    "utf8",
+  );
+  const source = sources["test-edge-node-sigterm.sh"];
+  assert.match(compose, /stop_grace_period: 15s/);
+  assert.match(compose, /entrypoint: \["\/usr\/local\/bin\/iotkit-edge-node"\]/);
+  assert.match(trialCompose, /edge-node:[\s\S]*?stop_grace_period: 15s/);
+  assert.match(source, /docker kill --signal SIGTERM/);
+  assert.match(source, /mkfifo/);
+  assert.match(source, /early-start/);
+  assert.match(source, /State\.ExitCode/);
+  assert.match(source, /PRAGMA quick_check/);
+  assert.match(source, /publication_log/);
 });
 
 test("PostgreSQL gate covers upgrades, profile migration, and recovery hold", () => {

@@ -9,7 +9,9 @@ mod retention;
 mod supervision;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,6 +27,13 @@ use iotkit_input_adapter_host_api::{
     AdapterCompletion, AdapterStartContext, RunningInputAdapter, SourceBoundIngest,
 };
 use tracing_subscriber::EnvFilter;
+
+// Deployment profiles give Docker 15 seconds. Keep cleanup bounded to ten
+// seconds so runtime teardown can finish without Docker escalating to SIGKILL.
+const SHUTDOWN_CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+
+type ShutdownSignal = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send>>;
 
 fn version_requested(args: &[String]) -> bool {
     matches!(args, [_, value] if value == "--version")
@@ -50,6 +59,19 @@ fn main() {
     // R20: パニックしたタスクのbacktraceを確実にログへ残す(D1)。
     supervision::install_panic_hook();
 
+    // Register process signals before any recovery/configuration work can start
+    // a service or mutate durable state. The bare runtime only owns Tokio's
+    // signal driver here; application tasks are still behind the recovery fence.
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let mut shutdown_signal = match rt.block_on(async { install_shutdown_signal() }) {
+        Ok(signal) => signal,
+        Err(error) => {
+            tracing::error!(error = %error, "failed to install shutdown signal handlers");
+            rt.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+            std::process::exit(1);
+        }
+    };
+
     // Parse TOML and environment overrides only.  Adapter catalog validation
     // and effective-value construction happen after the process-wide recovery
     // fence, including for a syntactically valid config with an invalid
@@ -70,7 +92,7 @@ fn main() {
     };
     // Recovery state is the process-wide startup fence.  Probe with a read-only
     // connection before catalog validation, effective-config logging, migration,
-    // identity/provenance mutation, runtime construction, or any service setup.
+    // identity/provenance mutation, or any application service setup.
     match iotkit_core_recovery::probe_startup_path(Path::new(db_path)) {
         Ok(RecoveryStartupMode::Normal | RecoveryStartupMode::Recovered { .. }) => {}
         Ok(
@@ -193,11 +215,13 @@ fn main() {
     }
     tracing::info!(db_path = %config.db_path, "database initialized");
 
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    let collector_alive = rt.block_on(run(config, db));
+    let collector_alive = rt.block_on(run(config, db, &mut shutdown_signal));
+    // Periodic tasks are detached from the fan-in loop. Do not let an in-flight
+    // blocking task consume Docker's remaining shutdown grace.
+    rt.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
     if !collector_alive {
         // R20コメントと同じ方針: プロセスレベルの再起動はsystemdの責務。ここでは非ゼロexitで
-        // 「死んでいる」ことを伝えるだけ(正常なctrl_c終了はexit 0のまま区別する)。
+        // 「死んでいる」ことを伝えるだけ(要求されたshutdownはexit 0のまま区別する)。
         std::process::exit(1);
     }
 }
@@ -212,10 +236,14 @@ fn ledger_to_storage_err(e: iotkit_core_ledger::LedgerError) -> iotkit_core_stor
 }
 
 /// フォールインループを実行する。戻り値は「プロセスとして正常終了してよいか」
-/// (true=正常終了・ctrl_c/全アダプタclose、false=コレクタ死亡/API bind失敗/
+/// (true=正常終了・要求されたshutdown/全アダプタclose、false=コレクタ死亡/API bind失敗/
 /// API専用モードでのAPI異常終了によるfail-fast終了)。
 /// `main`はfalseを非ゼロexitに変換し、systemdのプロセス再起動に委ねる(R20と同じ設計方針)。
-async fn run(config: config::EdgeNodeConfig, db: iotkit_core_storage::DbHandle) -> bool {
+async fn run(
+    config: config::EdgeNodeConfig,
+    db: iotkit_core_storage::DbHandle,
+    shutdown_signal: &mut ShutdownSignal,
+) -> bool {
     let engine = Engine::new();
     let mut host = AdapterHost::new();
     let db_path = std::path::PathBuf::from(&config.db_path);
@@ -478,7 +506,7 @@ async fn run(config: config::EdgeNodeConfig, db: iotkit_core_storage::DbHandle) 
     let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
 
     // コレクタタスク死亡時、fan-inループをbreakした後にfalseを返して非ゼロexitへ導くフラグ
-    // (正常終了=ctrl_c/全アダプタclose はtrueのまま=exit 0)。プロセスレベルの再起動は
+    // (正常終了=要求されたshutdown/全アダプタclose はtrueのまま=exit 0)。プロセスレベルの再起動は
     // systemdの責務(R20コメント参照)であり、ここでは「健康でないまま動き続けない」ことだけ担保する。
     let mut collector_alive = true;
     let mut api_failed = false;
@@ -489,7 +517,6 @@ async fn run(config: config::EdgeNodeConfig, db: iotkit_core_storage::DbHandle) 
     let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
     let mut pending_restart_count = 0usize;
     let mut exhausted_adapter_count = 0usize;
-
     // Unified fan-in loop
     loop {
         if host.is_empty()
@@ -505,8 +532,12 @@ async fn run(config: config::EdgeNodeConfig, db: iotkit_core_storage::DbHandle) 
         }
 
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("Shutdown signal received");
+            shutdown_result = &mut *shutdown_signal => {
+                if let Err(error) = shutdown_result {
+                    tracing::warn!(error = %error, "shutdown signal listener failed");
+                } else {
+                    tracing::info!("Shutdown signal received");
+                }
                 if let Some(shutdown) = api_shutdown.take() {
                     api_shutdown_requested = true;
                     let _ = shutdown.send(());
@@ -719,29 +750,38 @@ async fn run(config: config::EdgeNodeConfig, db: iotkit_core_storage::DbHandle) 
         }
     }
 
-    host.shutdown_all().await;
-    if let Some(shutdown) = api_shutdown.take() {
-        api_shutdown_requested = true;
-        let _ = shutdown.send(());
-    }
-    if let Some(join) = api_join.take()
-        && api_task_running
-    {
-        match join.await {
-            Ok(()) if api_shutdown_requested => {
-                tracing::info!("control-plane API task exited during requested shutdown");
-            }
-            Ok(()) => {
-                tracing::info!("control-plane API task exited during shutdown");
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "control-plane API task panicked during shutdown");
+    let cleanup_completed = shutdown_with_timeout(SHUTDOWN_CLEANUP_TIMEOUT, async {
+        host.shutdown_all().await;
+        if let Some(shutdown) = api_shutdown.take() {
+            api_shutdown_requested = true;
+            let _ = shutdown.send(());
+        }
+        if let Some(join) = api_join.take()
+            && api_task_running
+        {
+            match join.await {
+                Ok(()) if api_shutdown_requested => {
+                    tracing::info!("control-plane API task exited during requested shutdown");
+                }
+                Ok(()) => {
+                    tracing::info!("control-plane API task exited during shutdown");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "control-plane API task panicked during shutdown");
+                }
             }
         }
-    }
-    if let Some(task) = publish_task.take() {
-        task.abort();
-        let _ = task.await;
+        if let Some(task) = publish_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    })
+    .await;
+    if !cleanup_completed {
+        tracing::error!(
+            timeout_ms = SHUTDOWN_CLEANUP_TIMEOUT.as_millis() as u64,
+            "graceful shutdown cleanup timed out"
+        );
     }
     {
         let mut health = health_state.lock().expect("health state mutex poisoned");
@@ -752,7 +792,7 @@ async fn run(config: config::EdgeNodeConfig, db: iotkit_core_storage::DbHandle) 
     let devices = engine.devices().await;
     tracing::info!(device_count = devices.len(), "Engine state at shutdown");
 
-    !should_exit_nonzero(collector_alive, api_failed, mqtt_failed)
+    !should_exit_nonzero(collector_alive, api_failed, mqtt_failed, cleanup_completed)
 }
 
 async fn wait_for_api_task(
@@ -770,6 +810,34 @@ async fn wait_for_mqtt_task(
     match publish_task {
         Some(task) => task.await,
         None => std::future::pending().await,
+    }
+}
+
+async fn shutdown_with_timeout<F>(timeout: Duration, cleanup: F) -> bool
+where
+    F: Future<Output = ()>,
+{
+    tokio::time::timeout(timeout, cleanup).await.is_ok()
+}
+
+fn install_shutdown_signal() -> Result<ShutdownSignal, std::io::Error> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut terminate = signal(SignalKind::terminate())?;
+        Ok(Box::pin(async move {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+            Ok(())
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(Box::pin(tokio::signal::ctrl_c()))
     }
 }
 
@@ -894,8 +962,13 @@ fn should_stop_after_all_adapter_streams_closed(
         && (!service_only_mode || !background_service_running)
 }
 
-fn should_exit_nonzero(collector_alive: bool, api_failed: bool, mqtt_failed: bool) -> bool {
-    !collector_alive || api_failed || mqtt_failed
+fn should_exit_nonzero(
+    collector_alive: bool,
+    api_failed: bool,
+    mqtt_failed: bool,
+    cleanup_completed: bool,
+) -> bool {
+    !collector_alive || api_failed || mqtt_failed || !cleanup_completed
 }
 
 fn log_fan_in_stop(service_only_mode: bool, api_failed: bool) {

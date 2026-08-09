@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転、activation、record family、ack、re
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 8
+revision: 9
 ---
 
 # Edge Node保管責任契約 v1
@@ -191,6 +191,13 @@ IoTKit Edgeはcoalesceの前に保持するwire payloadを`AcceptedThrough`と�
 - Activation command outboxとEdge Node receiptはactivation retry権威。Broker sessionではない。
 - Inactive中もbounded local commissioning collectionを続けるがR10 backlogを作らない。
 - IoTKit Edge/network停止中もlocal collectionと未ack rowを保持。
+- SIGINTまたはSIGTERMでは、Edge Nodeは同じbounded graceful shutdown pathへ入る。Adapterとcontrol
+  APIへ停止を要求してもtarget cursorを作為的にadvanceせず、未ack rowをacceptedとして扱ったりpurgeしたりしない。
+  Publisher停止前に完了したvalid application acknowledgementは通常どおり処理する。restart後は耐久state
+  からretryを再開する。cleanup attemptは10秒にboundedする。Containerまたはservice managerは、forced
+  termination前にcleanに終了できるよう、少なくとも15秒のstop grace（例: Dockerの`stop_grace_period:
+  15s`、systemdの`TimeoutStopSec=15s`）を与えなければならない。cleanup deadlineを超えた場合、
+  Edge Nodeはclean shutdownとして扱わずnonzeroで終了する。
 - subscription済みでapplication未ack batchがない間、Edge Nodeは最後のack後に追加されたrowを開始するため、1秒間隔でindexed outboxをprobeする。このprobeはinflight batchを再送せず、別の30秒retryはinflight retransmit、descriptor refresh、pre-activation cleanupを担う。両scheduleの最初のtickはtask開始直後ではなく、各intervalを完全に経過した後である。
 - Reconnect後はcurrent batchをretryする。restartで同じcursor startからより広いbatchをrebuildした場合、検証済みの過去prefix ackはそのprefixだけをadvanceし、残りrangeをrebuildする。
 - IoTKit Edge exact replayは既存rowを検証し、commit済みwatermarkを再publish。
