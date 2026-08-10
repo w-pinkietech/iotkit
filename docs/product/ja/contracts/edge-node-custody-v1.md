@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転と、分離したbounded Edge Node運�
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 11
+revision: 12
 ---
 
 # Edge Node保管責任契約 v1
@@ -104,6 +104,8 @@ Descriptor topicはEdge Node所有device/signal metadataのschema version 2 comp
 任意`model_id`は明示persistしたsoftware catalog IDで、1–64 ASCII byteの`[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*`です。Display label、device identity、semantic分類ではありません。IoTKit Edgeは表示できますが、semantic mapping、grouping、authorizationを分岐しません。
 
 Snapshotは`system_id`、`series_key`、任意display ID、device state、measurement key、channel、variant、canonical unit、value typeを含みます。Hardware/provider ID、Adapter type/instance、physical locator、configured source、credential、Adapter payloadを含みません。Lower revisionはignoreし、同epoch・同revision・異内容はconflictです。Descriptorはinactive Nodeをdiscoverできますがactivateせず、purge/admission/ackを変更しません。
+
+`testdata/egress/v2/descriptor-conformance-cases.json`のclosed shared descriptor conformance corpusはfull snapshot payloadを含みます。各caseはstable name、expected validity、reason categoryを持ちます。Rust Edge Node publisherとRust IoTKit Edge receiverはこれをconsumeして同じaccept/reject判定をしなければならず、receiver validationがauthorityです。Rejected descriptorはdescriptor stateまたはinventoryをupdateせず、activation stateも変更しません。
 
 ### Restart・交換時のidentity
 

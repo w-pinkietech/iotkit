@@ -753,21 +753,20 @@ impl DescriptorSnapshot {
     }
 
     pub fn validate(&self) -> Result<(), ContractError> {
-        if self.schema_version != 2
-            || !self.complete
-            || self.descriptor_revision == 0
-            || self.descriptor_revision > i64::MAX as u64
-        {
-            return Err(invalid(
-                "only complete descriptor schema version 2 is supported",
-            ));
+        if self.schema_version != 2 || !self.complete {
+            return Err(invalid("schema_version"));
         }
-        validate_topic_segment("edge_node_id", &self.edge_node_id)?;
-        validate_identity("ledger_epoch", &self.ledger_epoch)?;
+        if self.descriptor_revision == 0 || self.descriptor_revision > i64::MAX as u64 {
+            return Err(invalid("descriptor_revision"));
+        }
+        validate_descriptor_topic_segment(&self.edge_node_id)?;
+        validate_descriptor_identity(&self.ledger_epoch)?;
         let mut devices = HashSet::new();
         for device in &self.devices {
-            if !valid_uuid(&device.system_id)
-                || !devices.insert(device.system_id.as_str())
+            if !valid_uuid(&device.system_id) {
+                return Err(invalid("noncanonical_uuid"));
+            }
+            if !devices.insert(device.system_id.as_str())
                 || !matches!(device.state.as_str(), "quarantined" | "active" | "retired")
                 || device
                     .identifier
@@ -783,23 +782,33 @@ impl DescriptorSnapshot {
         }
         let mut signals = HashSet::new();
         for signal in &self.signals {
+            if !valid_uuid(&signal.system_id) {
+                return Err(invalid("noncanonical_uuid"));
+            }
             if !devices.contains(signal.system_id.as_str())
                 || !signals.insert(signal.series_key.as_str())
                 || !matches!(
                     signal.value_type.as_str(),
                     "float" | "int" | "bool" | "record"
                 )
-                || !valid_measurement_key(&signal.measurement_key)
-                || signal.channel_index.is_some_and(|channel| channel < 0)
-                || signal.variant.is_empty()
-                || signal.variant.contains(':')
-                || signal.variant.chars().any(char::is_control)
                 || signal
                     .unit
                     .as_deref()
                     .is_some_and(|value| !valid_display_text(value, 128, true))
             {
                 return Err(invalid("invalid or duplicate descriptor signal"));
+            }
+            if !valid_measurement_key(&signal.measurement_key) {
+                return Err(invalid("measurement_key"));
+            }
+            if signal.channel_index.is_some_and(|channel| channel < 0)
+                || signal.variant.is_empty()
+                || signal.variant.contains(':')
+            {
+                return Err(invalid("identity_boundary"));
+            }
+            if signal.variant.chars().any(char::is_control) {
+                return Err(invalid("identity_control"));
             }
             let expected_channel = signal
                 .channel_index
@@ -826,6 +835,24 @@ impl DescriptorSnapshot {
         }
         Ok(())
     }
+}
+
+fn validate_descriptor_topic_segment(value: &str) -> Result<(), ContractError> {
+    validate_descriptor_identity(value)?;
+    if value.contains(['/', '+', '#']) {
+        return Err(invalid("identity_boundary"));
+    }
+    Ok(())
+}
+
+fn validate_descriptor_identity(value: &str) -> Result<(), ContractError> {
+    if value.is_empty() || value.len() > 255 || value.contains(':') {
+        return Err(invalid("identity_boundary"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid("identity_control"));
+    }
+    Ok(())
 }
 
 fn validate_prefixed_hex(field: &str, value: &str, prefix: &str) -> Result<(), ContractError> {

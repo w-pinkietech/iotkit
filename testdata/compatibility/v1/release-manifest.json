@@ -50,11 +50,15 @@
         "testdata/egress/v1/status-heartbeat.json",
         "testdata/egress/v1/activation-request.json",
         "testdata/egress/v1/activation-result.json",
-        "testdata/egress/v2/descriptor-snapshot.json"
+        "testdata/egress/v2/descriptor-snapshot.json",
+        "testdata/egress/v2/descriptor-conformance-cases.json"
       ],
       "tests": [
         "edge-node/core/publish/tests/egress_v1_fixtures.rs",
-        "edge/custody-contract/tests/fixtures.rs"
+        "edge-node/core/publish/tests/descriptor_snapshot.rs",
+        "edge/custody-contract/tests/fixtures.rs",
+        "edge-node/apps/node/tests/descriptor_snapshot.rs",
+        "edge/tests/mqtt_activation.rs"
       ]
     },
     {

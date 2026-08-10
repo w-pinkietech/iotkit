@@ -1,4 +1,5 @@
 use iotkit_core_publish::descriptor::DESCRIPTOR_SCHEMA_VERSION;
+use iotkit_edge_custody_contract::DescriptorSnapshot as ReceiverDescriptorSnapshot;
 
 #[test]
 fn builds_adapter_neutral_snapshot_with_resolved_metadata() {
@@ -62,7 +63,13 @@ fn builds_adapter_neutral_snapshot_with_resolved_metadata() {
     assert_eq!(snapshot.signals[0].value_type, "bool");
     assert_eq!(snapshot.signals[0].channel_index, None);
 
-    let text = String::from_utf8(snapshot.encode_bounded().unwrap()).unwrap();
+    let payload = snapshot.encode_bounded().unwrap();
+    let received = ReceiverDescriptorSnapshot::decode(&payload)
+        .expect("receiver accepts the builder's exact descriptor bytes");
+    assert_eq!(received.descriptor_revision, snapshot.descriptor_revision);
+    assert_eq!(received.edge_node_id, snapshot.edge_node_id);
+
+    let text = String::from_utf8(payload).unwrap();
     assert!(!text.contains("secret-provider-id"));
     let fixture =
         std::fs::read_to_string("../../../testdata/egress/v2/descriptor-snapshot.json").unwrap();

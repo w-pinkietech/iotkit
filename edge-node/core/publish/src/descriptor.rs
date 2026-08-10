@@ -70,15 +70,12 @@ impl DescriptorSnapshot {
 
     fn validate(&self) -> Result<(), PublishError> {
         if self.schema_version != DESCRIPTOR_SCHEMA_VERSION || !self.complete {
-            return invalid("only complete descriptor schema version 2 is supported");
+            return invalid("schema_version");
         }
-        crate::wire::validate_topic_segment("edge_node_id", &self.edge_node_id)
-            .map_err(|error| PublishError::Invalid(error.to_string()))?;
-        if self.ledger_epoch.is_empty() || self.ledger_epoch.contains(':') {
-            return invalid("ledger_epoch is empty or contains ':'");
-        }
-        if self.descriptor_revision < 1 {
-            return invalid("descriptor_revision must be positive");
+        validate_descriptor_topic_segment(&self.edge_node_id)?;
+        validate_descriptor_identity(&self.ledger_epoch)?;
+        if self.descriptor_revision == 0 || self.descriptor_revision > i64::MAX as u64 {
+            return invalid("descriptor_revision");
         }
 
         let mut device_ids = HashSet::with_capacity(self.devices.len());
@@ -110,13 +107,17 @@ impl DescriptorSnapshot {
             if !device_ids.contains(signal.system_id.as_str()) {
                 return invalid("descriptor signal references an unknown device");
             }
-            if signal.measurement_key.is_empty()
-                || signal.measurement_key.contains(':')
+            if !valid_measurement_key(&signal.measurement_key) {
+                return invalid("measurement_key");
+            }
+            if signal.channel_index.is_some_and(|channel| channel < 0)
                 || signal.variant.is_empty()
                 || signal.variant.contains(':')
-                || signal.channel_index.is_some_and(|channel| channel < 0)
             {
-                return invalid("invalid descriptor signal identity");
+                return invalid("identity_boundary");
+            }
+            if signal.variant.chars().any(char::is_control) {
+                return invalid("identity_control");
             }
             let channel = signal
                 .channel_index
@@ -149,9 +150,41 @@ impl DescriptorSnapshot {
 }
 
 fn validate_system_id(value: &str) -> Result<(), PublishError> {
-    uuid::Uuid::parse_str(value)
-        .map(|_| ())
-        .map_err(|_| PublishError::Invalid("descriptor system_id is not a UUID".into()))
+    let parsed = uuid::Uuid::parse_str(value)
+        .map_err(|_| PublishError::Invalid("noncanonical_uuid".into()))?;
+    if parsed.hyphenated().to_string() != value {
+        return invalid("noncanonical_uuid");
+    }
+    Ok(())
+}
+
+fn validate_descriptor_topic_segment(value: &str) -> Result<(), PublishError> {
+    validate_descriptor_identity(value)?;
+    if value.contains(['/', '+', '#']) {
+        return invalid("identity_boundary");
+    }
+    Ok(())
+}
+
+fn validate_descriptor_identity(value: &str) -> Result<(), PublishError> {
+    if value.is_empty() || value.len() > 255 || value.contains(':') {
+        return invalid("identity_boundary");
+    }
+    if value.chars().any(char::is_control) {
+        return invalid("identity_control");
+    }
+    Ok(())
+}
+
+fn valid_measurement_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.split('.').all(|segment| {
+            let mut bytes = segment.bytes();
+            bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+                && bytes
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
 }
 
 fn invalid<T>(message: &str) -> Result<T, PublishError> {

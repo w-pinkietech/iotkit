@@ -5,10 +5,10 @@ description: "Defines MQTT custody transfer plus the separate bounded Edge Node 
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 11
+revision: 12
 ---
 
-# Edge Node custody contract v1 (R11 exit)
+# Edge Node custody contract v1 (R12 exit)
 
 Status: Approved MQTT v1 target contract. The records/descriptors/accepted-through custody path is
 implemented, including Edge Node activation and publication admission. The older HTTPS
@@ -169,6 +169,13 @@ series identity and durably replicates the snapshot. Lower revisions in one ledg
 ignored; equal revisions with different content are conflicts. Persisted model binding changes
 advance `descriptor_revision`, so different model content is never published under the same
 revision.
+
+The closed shared descriptor conformance corpus at
+`testdata/egress/v2/descriptor-conformance-cases.json` contains full snapshot payloads. Each case
+has a stable name, expected validity, and reason category. The Rust Edge Node publisher and Rust
+IoTKit Edge receiver MUST consume it and make the same accept/reject decision; receiver validation
+is authoritative. A rejected descriptor does not update descriptor state or inventory and does not
+change activation state.
 
 ### Identity across restart and replacement
 
