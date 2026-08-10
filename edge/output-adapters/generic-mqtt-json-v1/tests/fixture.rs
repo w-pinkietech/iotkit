@@ -4,40 +4,122 @@ use iotkit_output_adapter_api::{
 };
 use iotkit_output_adapter_generic_mqtt_json_v1::{GenericMqttJsonAdapter, GenericMqttJsonPolicy};
 use iotkit_output_adapter_testkit::{ConformanceCase, assert_adapter_conformance};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Fixture {
+    adapter_id: String,
+    config: FixtureConfig,
+    observation: FixtureObservation,
+    publication: FixturePublication,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureConfig {
+    schema_version: u32,
+    topic: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureObservation {
+    observation_id: String,
+    series_id: String,
+    sequence: u64,
+    observed_at: i64,
+    kind: FixtureObservationKind,
+    value: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum FixtureObservationKind {
+    CumulativeValue,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixturePublication {
+    topic: String,
+    qos: u8,
+    retain: bool,
+    payload: FixturePayload,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixturePayload {
+    schema_version: u32,
+    observation_id: String,
+    series_id: String,
+    sequence: u64,
+    observed_at: i64,
+    kind: FixtureObservationKind,
+    value: u64,
+}
 
 #[test]
 fn matches_the_shared_cumulative_value_fixture() {
-    let config = serde_json::value::to_raw_value(&serde_json::json!({
-        "schema_version": 1,
-        "topic": "factory/line-a/production"
-    }))
-    .unwrap();
+    let fixture: Fixture = serde_json::from_str(include_str!(
+        "../../../../testdata/output/v1/iotkit-cumulative-value.json"
+    ))
+    .expect("decode shared generic output fixture");
+    assert_eq!(
+        fixture.observation.kind,
+        FixtureObservationKind::CumulativeValue,
+        "shared fixture observation kind",
+    );
+    assert_eq!(
+        fixture.publication.payload.kind,
+        FixtureObservationKind::CumulativeValue,
+        "shared fixture payload kind",
+    );
     let observation = Observation::new(
-        "d36cb7b3-7010-43b3-afc6-1931ed705dea",
-        "a921df88-6af2-46ca-a5f1-f346bf4433bb",
-        42,
-        1_784_190_000_123,
-        ObservationValue::CumulativeValue(1524),
+        &fixture.observation.observation_id,
+        &fixture.observation.series_id,
+        fixture.observation.sequence,
+        fixture.observation.observed_at,
+        ObservationValue::CumulativeValue(fixture.observation.value),
     )
-    .unwrap();
+    .expect("fixture observation is valid");
+    let config = serde_json::value::to_raw_value(&fixture.config)
+        .expect("encode shared generic output config");
+    let expected_payload = serde_json::to_string(&fixture.publication.payload)
+        .expect("encode shared generic output payload");
 
     assert_adapter_conformance(
         &GenericMqttJsonAdapter,
         &[ConformanceCase {
             config: &config,
             observation: &observation,
-            expected_topic: "factory/line-a/production",
-            expected_qos: 1,
-            expected_retain: false,
-            expected_payload: r#"{"schema_version":1,"observation_id":"d36cb7b3-7010-43b3-afc6-1931ed705dea","series_id":"a921df88-6af2-46ca-a5f1-f346bf4433bb","sequence":42,"observed_at":1784190000123,"kind":"cumulative_value","value":1524}"#,
+            expected_topic: &fixture.publication.topic,
+            expected_qos: fixture.publication.qos,
+            expected_retain: fixture.publication.retain,
+            expected_payload: &expected_payload,
         }],
     )
-    .unwrap();
+    .expect("adapter matches shared generic output fixture");
 
-    assert_eq!(
-        GenericMqttJsonAdapter.descriptor().id,
-        "iotkit.mqtt-json.v1"
-    );
+    assert_eq!(GenericMqttJsonAdapter.descriptor().id, fixture.adapter_id);
+}
+
+#[test]
+fn shared_fixture_is_closed_about_fields_and_observation_kind() {
+    let mut unknown_field: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../testdata/output/v1/iotkit-cumulative-value.json"
+    ))
+    .expect("decode fixture JSON");
+    unknown_field["observation"]["unexpected"] = true.into();
+    assert!(serde_json::from_value::<Fixture>(unknown_field).is_err());
+
+    let mut wrong_kind: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../testdata/output/v1/iotkit-cumulative-value.json"
+    ))
+    .expect("decode fixture JSON");
+    wrong_kind["observation"]["kind"] = "numeric".into();
+    assert!(serde_json::from_value::<Fixture>(wrong_kind).is_err());
 }
 
 #[test]

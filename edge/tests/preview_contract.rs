@@ -470,6 +470,33 @@ async fn semantic_preview_uses_real_calibration_evaluator_and_bounded_raw_window
 }
 
 #[tokio::test]
+async fn semantic_preview_rejects_blank_rule_identity_and_display_name() {
+    let (_directory, storage, signal_ref) = fixture().await;
+    for (rule_id, display_name) in [(" ", "Preview"), ("draft-preview", " \t")] {
+        let result = Semantics::new(storage.clone())
+            .preview(MappingPreviewRequest {
+                signal_ref: signal_ref.clone(),
+                calibration: Calibration {
+                    scale: 1.0,
+                    offset: 0.0,
+                },
+                rules: vec![SemanticPreviewRule {
+                    rule_id: rule_id.into(),
+                    display_name: display_name.into(),
+                    spec: RuleSpec {
+                        kind: SemanticKind::Numeric,
+                        detector: Detector::default(),
+                        trigger: TriggerMode::None,
+                    },
+                }],
+                test_value: None,
+            })
+            .await;
+        assert!(result.is_err(), "{rule_id:?} / {display_name:?} must fail");
+    }
+}
+
+#[tokio::test]
 async fn output_preview_uses_policy_transform_and_durable_puback_state() {
     let (_directory, storage, signal_ref) = fixture().await;
     let semantics = Semantics::new(storage.clone());

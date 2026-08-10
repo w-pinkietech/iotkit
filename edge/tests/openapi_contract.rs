@@ -143,3 +143,21 @@ async fn closed_openapi_storage_and_diagnostics_schemas_track_runtime_json() {
     assert!(generated.contains("DiagnosticStage: {"));
     assert!(generated.contains("CertificateStatus: {"));
 }
+
+#[test]
+fn mapping_preview_openapi_tracks_the_current_closed_request_shape() {
+    let schema = include_str!("../openapi/edge-console-v1.yaml");
+    let request = schema
+        .split_once("    MappingPreviewRequest:\n")
+        .expect("MappingPreviewRequest schema")
+        .1
+        .split_once("    PreviewPoint:\n")
+        .expect("MappingPreviewRequest schema end")
+        .0;
+
+    assert!(request.contains("required: [signal_ref, calibration, rules]"));
+    assert!(!request.contains("        spec:\n"));
+    assert!(!schema.contains("DefinitionSpec:"));
+    assert!(!schema.contains("LegacyCondition:"));
+    assert!(!schema.contains("read older DefinitionSpec"));
+}

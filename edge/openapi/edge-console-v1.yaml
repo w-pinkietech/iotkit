@@ -161,10 +161,7 @@ paths:
       summary: Preview future-only semantic settings without writing them
       description: >
         Requires an authenticated IoTKit Console session, a matching
-        X-CSRF-Token header, and a same-origin browser request. The schema
-        documents the supported Console request; the server may continue to
-        read older DefinitionSpec representations for stored-client
-        compatibility.
+        X-CSRF-Token header, and a same-origin browser request.
       security:
         - EdgeSession: []
       parameters:
@@ -181,9 +178,7 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: "#/components/schemas/MappingPreview"
-                  - $ref: "#/components/schemas/MultipleRuleMappingPreview"
+                $ref: "#/components/schemas/MultipleRuleMappingPreview"
         "400":
           $ref: "#/components/responses/RequestError"
         "401":
@@ -474,35 +469,6 @@ components:
           format: int64
           minimum: 0
           maximum: 300000
-    LegacyCondition:
-      type: object
-      additionalProperties: false
-      properties:
-        mode:
-          type: string
-        bool_value:
-          type: boolean
-        threshold:
-          type: number
-        hysteresis:
-          type: number
-    DefinitionSpec:
-      type: object
-      additionalProperties: false
-      required: [kind, scale]
-      properties:
-        kind:
-          $ref: "#/components/schemas/SemanticKind"
-        scale:
-          type: number
-        offset:
-          type: number
-        detector:
-          $ref: "#/components/schemas/Detector"
-        condition:
-          $ref: "#/components/schemas/LegacyCondition"
-        trigger:
-          $ref: "#/components/schemas/TriggerMode"
     RuleSpec:
       type: object
       additionalProperties: false
@@ -514,23 +480,15 @@ components:
           $ref: "#/components/schemas/Detector"
         trigger:
           $ref: "#/components/schemas/TriggerMode"
-    CalibrationDraft:
+    PreviewCalibration:
       type: object
       additionalProperties: false
-      required: [scale]
+      required: [scale, offset]
       properties:
-        signal_ref:
-          type: string
-        revision:
-          type: integer
-          format: int64
         scale:
           type: number
         offset:
           type: number
-        created_at:
-          type: integer
-          format: int64
     SemanticRulePreviewDraft:
       type: object
       additionalProperties: false
@@ -547,19 +505,15 @@ components:
     MappingPreviewRequest:
       type: object
       additionalProperties: false
-      required: [signal_ref]
-      dependentRequired:
-        calibration: [rules]
+      required: [signal_ref, calibration, rules]
       properties:
         signal_ref:
           type: string
           minLength: 1
-        spec:
-          $ref: "#/components/schemas/DefinitionSpec"
         test_value:
           type: number
         calibration:
-          $ref: "#/components/schemas/CalibrationDraft"
+          $ref: "#/components/schemas/PreviewCalibration"
         rules:
           type: array
           minItems: 1
@@ -571,13 +525,19 @@ components:
       additionalProperties: false
       required:
         - received_at
+        - plot_at
         - input
         - input_min
         - input_max
         - calibrated
         - calibrated_min
         - calibrated_max
+        - active
+        - counter
         - sample_count
+        - active_samples
+        - transitions
+        - increment
       properties:
         received_at:
           type: integer
@@ -598,10 +558,14 @@ components:
         calibrated_max:
           type: number
         active:
-          type: boolean
+          oneOf:
+            - type: boolean
+            - type: "null"
         counter:
-          type: integer
-          format: int64
+          oneOf:
+            - type: integer
+              format: int64
+            - type: "null"
         sample_count:
           type: integer
         active_samples:
@@ -614,23 +578,34 @@ components:
     PreviewResult:
       type: object
       additionalProperties: false
-      required: [emitted, calibrated]
+      required: [emitted, number, boolean, integer, calibrated]
       properties:
         emitted:
           type: boolean
         number:
-          type: number
+          oneOf:
+            - type: number
+            - type: "null"
         boolean:
-          type: boolean
+          oneOf:
+            - type: boolean
+            - type: "null"
         integer:
-          type: integer
-          format: int64
+          oneOf:
+            - type: integer
+              format: int64
+            - type: "null"
         calibrated:
           type: number
-    PreviewBody:
+    SemanticRulePreview:
       type: object
-      required: [kind, input_count, plot_count, points]
+      additionalProperties: false
+      required: [rule_id, display_name, kind, input_count, plot_count, points, latest_point, test_result, error]
       properties:
+        rule_id:
+          type: string
+        display_name:
+          type: string
         kind:
           $ref: "#/components/schemas/SemanticKind"
         input_count:
@@ -638,80 +613,41 @@ components:
         plot_count:
           type: integer
         points:
-          oneOf:
-            - type: array
-              items:
-                $ref: "#/components/schemas/PreviewPoint"
-            - type: "null"
+          type: array
+          items:
+            $ref: "#/components/schemas/PreviewPoint"
         latest_point:
           oneOf:
             - $ref: "#/components/schemas/PreviewPoint"
             - type: "null"
         test_result:
-          $ref: "#/components/schemas/PreviewResult"
-        window_start:
-          type: integer
-          format: int64
-        window_end:
-          type: integer
-          format: int64
-        truncated_by:
-          type: string
-        rise_threshold:
-          type: number
-        fall_threshold:
-          type: number
+          oneOf:
+            - $ref: "#/components/schemas/PreviewResult"
+            - type: "null"
         error:
           type: string
-    MappingPreview:
-      allOf:
-        - $ref: "#/components/schemas/PreviewBody"
-    SemanticRulePreview:
-      allOf:
-        - $ref: "#/components/schemas/PreviewBody"
-        - type: object
-          required: [rule_id, display_name]
-          properties:
-            rule_id:
-              type: string
-            display_name:
-              type: string
     MultipleRuleMappingPreview:
       type: object
       additionalProperties: false
-      required: [calibration, rules]
+      required: [calibration, rules, window_start, window_end]
       properties:
         calibration:
-          $ref: "#/components/schemas/Calibration"
+          $ref: "#/components/schemas/PreviewCalibration"
         rules:
           type: array
+          minItems: 1
           items:
             $ref: "#/components/schemas/SemanticRulePreview"
         window_start:
-          type: integer
-          format: int64
+          oneOf:
+            - type: integer
+              format: int64
+            - type: "null"
         window_end:
-          type: integer
-          format: int64
-        truncated_by:
-          type: string
-    Calibration:
-      type: object
-      additionalProperties: false
-      required: [signal_ref, revision, scale, offset, created_at]
-      properties:
-        signal_ref:
-          type: string
-        revision:
-          type: integer
-          format: int64
-        scale:
-          type: number
-        offset:
-          type: number
-        created_at:
-          type: integer
-          format: int64
+          oneOf:
+            - type: integer
+              format: int64
+            - type: "null"
     ErrorDetail:
       type: object
       additionalProperties: false

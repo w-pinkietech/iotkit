@@ -1,42 +1,137 @@
 use iotkit_output_adapter_api::{
-    IdentityScope, Observation, ObservationKind, ObservationValue, ProfilePolicy, ProfileRequest,
+    IdentityScope, Observation, ObservationKind, ObservationValue, OutputAdapter, ProfilePolicy,
+    ProfileRequest,
 };
 use iotkit_output_adapter_pinikiet_mqtt_v1::{
     PinikietMqttAdapter, PinikietProfilePolicy, source_status,
 };
 use iotkit_output_adapter_testkit::{ConformanceCase, assert_adapter_conformance};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Fixture {
+    adapter_id: String,
+    config: FixtureConfig,
+    observation: FixtureObservation,
+    publication: FixturePublication,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureConfig {
+    schema_version: u32,
+    source_id: String,
+    sensor_id: String,
+    kind: FixturePublicationKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixtureObservation {
+    observation_id: String,
+    series_id: String,
+    sequence: u64,
+    observed_at: i64,
+    kind: FixtureObservationKind,
+    value: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum FixtureObservationKind {
+    CumulativeValue,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum FixturePublicationKind {
+    Production,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FixturePublication {
+    topic: String,
+    qos: u8,
+    retain: bool,
+    payload: FixturePayload,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FixturePayload {
+    schema_version: u32,
+    observation_id: String,
+    series_id: String,
+    sequence: u64,
+    observed_at: i64,
+    kind: FixturePublicationKind,
+    value: u64,
+}
 
 #[test]
 fn matches_the_shared_production_fixture() {
-    let config = serde_json::value::to_raw_value(&serde_json::json!({
-        "schema_version": 1,
-        "source_id": "iotkit-01",
-        "sensor_id": "press-sensor",
-        "kind": "production"
-    }))
-    .unwrap();
+    let fixture: Fixture = serde_json::from_str(include_str!(
+        "../../../../testdata/output/v1/pinikiet-production.json"
+    ))
+    .expect("decode shared Pinikiet output fixture");
+    assert_eq!(
+        fixture.observation.kind,
+        FixtureObservationKind::CumulativeValue,
+        "shared fixture observation kind",
+    );
+    assert_eq!(
+        fixture.publication.payload.kind,
+        FixturePublicationKind::Production,
+        "shared fixture payload kind",
+    );
     let observation = Observation::new(
-        "d36cb7b3-7010-43b3-afc6-1931ed705dea",
-        "a921df88-6af2-46ca-a5f1-f346bf4433bb",
-        42,
-        1_784_190_000_123,
-        ObservationValue::CumulativeValue(1524),
+        &fixture.observation.observation_id,
+        &fixture.observation.series_id,
+        fixture.observation.sequence,
+        fixture.observation.observed_at,
+        ObservationValue::CumulativeValue(fixture.observation.value),
     )
-    .unwrap();
+    .expect("fixture observation is valid");
+    let config = serde_json::value::to_raw_value(&fixture.config)
+        .expect("encode shared Pinikiet output config");
+    let expected_payload = serde_json::to_string(&fixture.publication.payload)
+        .expect("encode shared Pinikiet output payload");
 
     assert_adapter_conformance(
         &PinikietMqttAdapter,
         &[ConformanceCase {
             config: &config,
             observation: &observation,
-            expected_topic:
-                "pinikiet/v1/sources/iotkit-01/sensors/press-sensor/observations",
-            expected_qos: 1,
-            expected_retain: false,
-            expected_payload: r#"{"schema_version":1,"observation_id":"d36cb7b3-7010-43b3-afc6-1931ed705dea","series_id":"a921df88-6af2-46ca-a5f1-f346bf4433bb","sequence":42,"observed_at":1784190000123,"kind":"production","value":1524}"#,
+            expected_topic: &fixture.publication.topic,
+            expected_qos: fixture.publication.qos,
+            expected_retain: fixture.publication.retain,
+            expected_payload: &expected_payload,
         }],
     )
-    .unwrap();
+    .expect("adapter matches shared Pinikiet output fixture");
+
+    assert_eq!(PinikietMqttAdapter.descriptor().id, fixture.adapter_id);
+}
+
+#[test]
+fn shared_fixture_is_closed_about_fields_and_observation_kind() {
+    let mut unknown_field: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../testdata/output/v1/pinikiet-production.json"
+    ))
+    .expect("decode fixture JSON");
+    unknown_field["observation"]["unexpected"] = true.into();
+    assert!(serde_json::from_value::<Fixture>(unknown_field).is_err());
+
+    let mut wrong_kind: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../testdata/output/v1/pinikiet-production.json"
+    ))
+    .expect("decode fixture JSON");
+    wrong_kind["observation"]["kind"] = "numeric".into();
+    assert!(serde_json::from_value::<Fixture>(wrong_kind).is_err());
 }
 
 #[test]

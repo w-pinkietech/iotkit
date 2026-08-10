@@ -5,7 +5,7 @@ description: "認証付きHTTP ingestのwire schema、権限、retry、validatio
 language: ja
 translation_key: contracts.ingest-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit認証付きingest契約 v1
@@ -36,6 +36,20 @@ curl --fail-with-body --silent --show-error --cacert "$IOTKIT_CA" --header "Auth
 ESP32も同じHTTPS endpoint、bearer header、JSON Envelope、retry ruleを使います。Edge Node certificateまたは承認済みpublic SPKI trust anchorをread-only trust storeへprovisionし、毎回certificateとhostnameを検証します。Server認証を伴わないbearer tokenは対応構成ではありません。
 
 ## Wire schema
+
+### v1 decodingとversion境界
+
+配布するv1 Rust decoderは、`Envelope`、`ReadingItem`、acknowledgement、
+validation report object内のotherwise-validなunknown memberを意図的にignoreします。
+それらを保存・echoしません。Unknown enum/tagged-variant value、required field欠落、
+JSON type不一致、記載したRust range外の値はdecodeに失敗します。
+`declaration_version`はdeclaration metadataであり、HTTP wire-version negotiationでは
+ありません。
+
+この契約でsupportするHTTP majorは`/api/v1`だけです。Request bodyに
+`schema_version` switchはなく、未対応API-version pathを互換ingest endpointとして
+解釈しません。製品1.xのsupport windowとtolerant/strict surfaceの違いは
+[v1互換性方針](compatibility-policy-v1.md)を参照してください。
 
 `POST /api/v1/ingest`は`Content-Type: application/json`で、一つの`Envelope`を送ります。
 

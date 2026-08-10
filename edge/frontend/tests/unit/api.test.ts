@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMappingPreview } from "../../src/api";
 
+const previewRequest = {
+  signal_ref: "sig_01",
+  calibration: { scale: 1, offset: 0 },
+  rules: [
+    {
+      rule_id: "draft-raw",
+      display_name: "Raw input",
+      spec: { kind: "numeric" as const },
+    },
+  ],
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -10,10 +22,20 @@ describe("mapping preview API client", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          kind: "numeric",
-          input_count: 0,
-          plot_count: 0,
-          points: [],
+          calibration: { scale: 1, offset: 0 },
+          rules: [{
+            rule_id: "draft-raw",
+            display_name: "Raw input",
+            kind: "numeric",
+            input_count: 0,
+            plot_count: 0,
+            points: [],
+            latest_point: null,
+            test_result: null,
+            error: "",
+          }],
+          window_start: null,
+          window_end: null,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -21,7 +43,7 @@ describe("mapping preview API client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await createMappingPreview(
-      { signal_ref: "sig_01" },
+      previewRequest,
       "csrf-token",
       new AbortController().signal,
     );
@@ -43,12 +65,17 @@ describe("mapping preview API client", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ kind: "numeric" }), { status: 200 }),
+        new Response(JSON.stringify({
+          kind: "numeric",
+          input_count: 0,
+          plot_count: 0,
+          points: [],
+        }), { status: 200 }),
       ),
     );
 
     const result = await createMappingPreview(
-      { signal_ref: "sig_01" },
+      previewRequest,
       "csrf-token",
       new AbortController().signal,
     );

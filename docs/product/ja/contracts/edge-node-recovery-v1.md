@@ -5,7 +5,7 @@ description: "Sanitized暗号化Edge Node backup container、fenced-candidate re
 language: ja
 translation_key: contracts.edge-node-recovery-v1
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit Edge Node復旧契約 v1
@@ -45,20 +45,20 @@ collect、publish、ingest listener bindをできません。
 
 | Material | 規範artifact |
 | --- | --- |
-| Container header schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/node-backup-header-v1.schema.json) (`edge-node/core/recovery/contracts/node-backup-header-v1.schema.json`) |
-| Sanitized manifest schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json) (`edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json`) |
-| Recovery handoff schema | [schema](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json) (`edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json`) |
+| Container header schema | `edge-node/core/recovery/contracts/node-backup-header-v1.schema.json` |
+| Sanitized manifest schema | `edge-node/core/recovery/contracts/node-backup-manifest-v1.schema.json` |
+| Recovery handoff schema | `edge-node/core/recovery/contracts/recovery-handoff-v1.schema.json` |
 | Broker fence receipt schema | `edge-node/core/recovery/contracts/broker-fence-receipt-v1.schema.json` |
 | Fenced restore receipt schema | `edge-node/core/recovery/contracts/restore-receipt-v2.schema.json` |
-| Header golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json) (`edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json`) |
-| Manifest golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json) (`edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json`) |
-| Handoff golden | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json) (`edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json`) |
+| Header golden | `edge-node/core/recovery/tests/fixtures/node-backup-header-v1.json` |
+| Manifest golden | `edge-node/core/recovery/tests/fixtures/node-backup-manifest-v1.json` |
+| Handoff golden | `edge-node/core/recovery/tests/fixtures/recovery-handoff-v1.json` |
 | Broker fence receipt golden | `edge-node/core/recovery/tests/fixtures/broker-fence-receipt-v1.json` |
 | Receipt golden | `edge-node/core/recovery/tests/fixtures/restore-receipt-v2.json` |
 | Recovery MQTT control golden | `testdata/egress/v1/recovery-activation-{request,result}.json`、`testdata/egress/v1/recovery-completion{,-ack}.json` |
-| Binary conformance vector | [fixture](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/fixtures/node-backup-v1.bin) (`edge-node/core/recovery/tests/fixtures/node-backup-v1.bin`) |
-| Container conformance tests | [backup_contract.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/backup_contract.rs) と [container_tests.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/unit/container_tests.rs) |
-| Restore conformance tests | [restore_tests.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/core/recovery/tests/unit/restore_tests.rs) と [recovery_startup.rs](https://github.com/w-pinkietech/iotkit/blob/master/edge-node/apps/node/tests/recovery_startup.rs) |
+| Binary conformance vector | `edge-node/core/recovery/tests/fixtures/node-backup-v1.bin` |
+| Container conformance tests | `edge-node/core/recovery/tests/backup_contract.rs` と `edge-node/core/recovery/tests/unit/container_tests.rs` |
+| Restore conformance tests | `edge-node/core/recovery/tests/unit/restore_tests.rs` と `edge-node/apps/node/tests/recovery_startup.rs` |
 
 Checked-in binaryはpublic format vectorだけです。Production encryptionはOS
 randomnessを使い、passphrase、key、path、identity、digestをlog、error、

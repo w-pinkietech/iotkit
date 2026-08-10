@@ -110,6 +110,23 @@ test("okf-min reports its own required type failure", () =>
     assert.doesNotMatch(result.stderr, /\[iotkit-product\]/);
   }));
 
+test("iotkit-product rejects moving GitHub master evidence links", () => {
+  for (const kind of ["blob", "tree"]) {
+    withFixture((root) => {
+      write(
+        root,
+        "docs/product/en/concepts/example.md",
+        concept("en", "Concept", `[evidence](https://github.com/example/project/${kind}/master/evidence.json)`),
+      );
+
+      const result = run("iotkit-product", root);
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /moving GitHub master link/);
+    });
+  }
+});
+
 test("all mode attributes reserved-index failures to okf-min", () =>
   withFixture((root) => {
     write(root, "docs/product/en/index.md", "---\ntype: Index\n---\n\n* [Example](concepts/example.md)\n");

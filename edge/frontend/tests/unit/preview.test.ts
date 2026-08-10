@@ -173,8 +173,6 @@ interface PreviewResponseOptions {
   latestPoint?: Record<string, unknown>;
   ruleId?: string;
   displayName?: string;
-  riseThreshold?: number;
-  fallThreshold?: number;
   windowStart?: number;
   windowEnd?: number;
 }
@@ -187,61 +185,64 @@ function okPreviewResponse({
   latestPoint,
   ruleId = "rule-01",
   displayName = "温度",
-  riseThreshold,
-  fallThreshold,
   windowStart,
   windowEnd,
 }: PreviewResponseOptions = {}): Response {
   const receivedAt = Number(point?.received_at ?? 1_000);
+  const basePoint = previewPoint(point, receivedAt);
+  const resolvedPoints = (points ?? [{ ...basePoint, ...point }]).map(
+    (candidate) => previewPoint(candidate, receivedAt),
+  );
+  const resolvedLatestPoint = latestPoint
+    ? previewPoint(latestPoint, receivedAt)
+    : resolvedPoints.at(-1) ?? null;
+  const rule = previewRule({
+    rule_id: ruleId,
+    display_name: displayName,
+    kind,
+    input_count: inputCount ?? resolvedPoints.length,
+    plot_count: resolvedPoints.length,
+    points: resolvedPoints,
+    latest_point: resolvedLatestPoint,
+  }, receivedAt);
+  return new Response(
+    JSON.stringify({
+      calibration: { scale: 1, offset: 0 },
+      rules: [rule],
+      window_start: windowStart ??
+        resolvedPoints[0]?.plot_at ??
+        receivedAt,
+      window_end: windowEnd ??
+        resolvedPoints.at(-1)?.plot_at ??
+        receivedAt,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+function previewPoint(
+  point: Record<string, unknown> | undefined,
+  receivedAt: number,
+): Record<string, unknown> {
   const input = Number(point?.input ?? 24.8);
   const calibrated = Number(point?.calibrated ?? input);
-  const basePoint = {
+  return {
     received_at: receivedAt,
+    plot_at: Number(point?.plot_at ?? point?.received_at ?? receivedAt),
     input,
     input_min: Number(point?.input_min ?? input),
     input_max: Number(point?.input_max ?? input),
     calibrated,
     calibrated_min: Number(point?.calibrated_min ?? calibrated),
     calibrated_max: Number(point?.calibrated_max ?? calibrated),
+    active: point?.active ?? null,
+    counter: point?.counter ?? null,
     sample_count: 1,
+    active_samples: Number(point?.active_samples ?? 0),
+    transitions: Number(point?.transitions ?? 0),
+    increment: Number(point?.increment ?? 0),
+    ...point,
   };
-  const resolvedPoints = points ?? [{ ...basePoint, ...point }];
-  const resolvedLatestPoint = latestPoint
-    ? { ...basePoint, ...latestPoint }
-    : resolvedPoints.at(-1);
-  return new Response(
-    JSON.stringify({
-      calibration: {
-        signal_ref: "sig_01",
-        revision: 1,
-        scale: 1,
-        offset: 0,
-        created_at: 1,
-      },
-      rules: [
-        {
-          rule_id: ruleId,
-          display_name: displayName,
-          kind,
-          input_count: inputCount ?? resolvedPoints.length,
-          plot_count: resolvedPoints.length,
-          rise_threshold: riseThreshold,
-          fall_threshold: fallThreshold,
-          points: resolvedPoints,
-          latest_point: resolvedLatestPoint,
-        },
-      ],
-      window_start: windowStart ??
-        resolvedPoints[0]?.plot_at ??
-        resolvedPoints[0]?.received_at ??
-        receivedAt,
-      window_end: windowEnd ??
-        resolvedPoints.at(-1)?.plot_at ??
-        resolvedPoints.at(-1)?.received_at ??
-        receivedAt,
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
 }
 
 function previewResponse(receivedAt = 1000, input = 24.8): Response {
@@ -288,19 +289,45 @@ function multiplePreviewResponse(
 ): Response {
   return new Response(
     JSON.stringify({
-      calibration: {
-        signal_ref: "sig_01",
-        revision: 1,
-        scale: 1,
-        offset: 0,
-        created_at: 1,
-      },
-      rules,
+      calibration: { scale: 1, offset: 0 },
+      rules: rules.map((rule) => previewRule(rule, receivedAt)),
       window_start: receivedAt,
       window_end: receivedAt,
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
+}
+
+function previewRule(
+  rule: Record<string, unknown>,
+  receivedAt: number,
+): Record<string, unknown> {
+  const points = Array.isArray(rule.points)
+    ? rule.points.map((point) => previewPoint(
+      point as Record<string, unknown>,
+      receivedAt,
+    ))
+    : [];
+  const latestPoint = rule.latest_point
+    ? previewPoint(rule.latest_point as Record<string, unknown>, receivedAt)
+    : points.at(-1) ?? null;
+  return {
+    rule_id: typeof rule.rule_id === "string" ? rule.rule_id : "rule-01",
+    display_name: typeof rule.display_name === "string"
+      ? rule.display_name
+      : "温度",
+    kind: typeof rule.kind === "string" ? rule.kind : "numeric",
+    input_count: typeof rule.input_count === "number"
+      ? rule.input_count
+      : points.length,
+    plot_count: typeof rule.plot_count === "number"
+      ? rule.plot_count
+      : points.length,
+    points,
+    latest_point: latestPoint,
+    test_result: rule.test_result ?? null,
+    error: typeof rule.error === "string" ? rule.error : "",
+  };
 }
 
 afterEach(() => {
@@ -356,6 +383,11 @@ describe("automatic mapping preview", () => {
 
     initializePreviews();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [, initialRequest] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(initialRequest.body))).toMatchObject({
+      calibration: { scale: 1, offset: 0 },
+      rules: [{ rule_id: "rule-01" }],
+    });
 
     const selector = document.querySelector<HTMLSelectElement>(
       "[data-preview-rule-select]",
@@ -381,11 +413,14 @@ describe("automatic mapping preview", () => {
     );
 
     const [, request] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
-    const requestRules = JSON.parse(String(request.body)).rules as Array<{
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({ calibration: { scale: 1, offset: 0 } });
+    const requestRules = body.rules as Array<{
       rule_id: string;
     }>;
     expect(requestRules.map((rule) => rule.rule_id)).toContain("rule-01");
     expect(requestRules.map((rule) => rule.rule_id)).toContain("draft-normal");
+    expect(body).not.toHaveProperty("spec");
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -453,6 +488,13 @@ describe("automatic mapping preview", () => {
         "新しい異常検知",
       ),
     );
+    const [, request] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({ calibration: { scale: 1, offset: 0 } });
+    expect(body.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rule_id: "draft-alarm" }),
+    ]));
+    expect(body).not.toHaveProperty("spec");
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -543,7 +585,8 @@ describe("automatic mapping preview", () => {
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(request.body))).toMatchObject({
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({
       signal_ref: "sig_01",
       calibration: { scale: 1, offset: 0 },
       rules: [
@@ -553,11 +596,48 @@ describe("automatic mapping preview", () => {
         },
       ],
     });
+    expect(body).not.toHaveProperty("spec");
     await vi.waitFor(() =>
       expect(
         document.querySelector("[data-preview-feed-state]")?.textContent,
       ).toBe("実データを表示中"),
     );
+    document
+      .querySelector<HTMLButtonElement>("[data-preview-toggle]")
+      ?.click();
+  });
+
+  it("normalizes a legacy-shaped preview form into the current request", async () => {
+    installPreviewDOM();
+    for (const draft of document.querySelectorAll("details.semantic-rule-create")) {
+      draft.remove();
+    }
+    const form = document.querySelector<HTMLFormElement>(
+      "form.semantic-form",
+    )!;
+    delete form.dataset.ruleId;
+    delete form.dataset.previewId;
+    form.action = "/console/signals/sig_01/semantic-definition";
+
+    const fetchMock = vi.fn().mockResolvedValue(previewResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    initializePreviews();
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({
+      signal_ref: "sig_01",
+      calibration: { scale: 1, offset: 0 },
+      rules: [
+        {
+          rule_id: "draft-raw",
+          spec: { kind: "numeric" },
+        },
+      ],
+    });
+    expect(body).not.toHaveProperty("spec");
     document
       .querySelector<HTMLButtonElement>("[data-preview-toggle]")
       ?.click();
@@ -1222,8 +1302,6 @@ describe("automatic mapping preview", () => {
             active: true,
             active_samples: 2,
           },
-          riseThreshold: 30,
-          fallThreshold: 20,
         }),
       )),
     );
@@ -1364,7 +1442,7 @@ describe("automatic mapping preview", () => {
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
-  it("renders semantic overlays and legends for a successful selected rule", async () => {
+  it("renders semantic overlays without unsupported threshold metadata", async () => {
     installPreviewDOM();
     vi.stubGlobal(
       "fetch",
@@ -1382,8 +1460,6 @@ describe("automatic mapping preview", () => {
             active: true,
             active_samples: 2,
           },
-          riseThreshold: 30,
-          fallThreshold: 20,
         }),
       ),
     );
@@ -1395,7 +1471,7 @@ describe("automatic mapping preview", () => {
 
     expect(document.querySelector(".chart-range-result")).not.toBeNull();
     expect(document.querySelector(".chart-latest-point")).not.toBeNull();
-    expect(document.querySelectorAll(".chart-threshold")).toHaveLength(2);
+    expect(document.querySelectorAll(".chart-threshold")).toHaveLength(0);
     expect(document.querySelector(".chart-active-band")).not.toBeNull();
     expect(
       document.querySelector<HTMLElement>("[data-preview-result-legend]")
@@ -1404,7 +1480,7 @@ describe("automatic mapping preview", () => {
     expect(
       document.querySelector<HTMLElement>("[data-preview-threshold-legend]")
         ?.hidden,
-    ).toBe(false);
+    ).toBe(true);
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 
@@ -1437,8 +1513,6 @@ describe("automatic mapping preview", () => {
             : okPreviewResponse({
                 kind: "cumulative_counter",
                 points,
-                riseThreshold: 15,
-                fallThreshold: 5,
               }),
         );
       }),
@@ -1458,7 +1532,7 @@ describe("automatic mapping preview", () => {
         ?.hidden,
     ).toBe(true);
     expect(document.querySelector(".chart-latest-point")).not.toBeNull();
-    expect(document.querySelectorAll(".chart-threshold")).toHaveLength(2);
+    expect(document.querySelectorAll(".chart-threshold")).toHaveLength(0);
     document.querySelector<HTMLButtonElement>("[data-preview-toggle]")?.click();
   });
 

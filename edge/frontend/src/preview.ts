@@ -14,15 +14,17 @@ import {
 } from "./dom";
 import { csrfToken, SETTING_TAB_CHANGE_EVENT } from "./shell";
 import {
-  definitionSpec,
   ruleSpec,
   type SemanticKind,
 } from "./semantic";
 import { renderSignalChart } from "./signal-chart";
 
-type PreviewBody = components["schemas"]["PreviewBody"];
 type PreviewPoint = components["schemas"]["PreviewPoint"];
 type SemanticRulePreview = components["schemas"]["SemanticRulePreview"];
+type PreviewBody = Omit<SemanticRulePreview, "rule_id" | "display_name"> & {
+  window_start?: number | null;
+  window_end?: number | null;
+};
 
 interface PreviewSelection {
   raw: PreviewBody | null;
@@ -182,11 +184,11 @@ function rawPreviewPoint(point: PreviewPoint): PreviewPoint {
     calibrated: point.input,
     calibrated_min: point.input_min,
     calibrated_max: point.input_max,
-    active: undefined,
-    active_samples: undefined,
-    transitions: undefined,
-    counter: undefined,
-    increment: undefined,
+    active: null,
+    active_samples: 0,
+    transitions: 0,
+    counter: null,
+    increment: 0,
   };
 }
 
@@ -201,11 +203,6 @@ function mergePreviewPoints(
   const leftWeight = sampleWeight(left);
   const rightWeight = sampleWeight(right);
   const sampleCount = leftWeight + rightWeight;
-  const hasActiveSamples =
-    left.active_samples !== undefined || right.active_samples !== undefined;
-  const hasTransitions =
-    left.transitions !== undefined || right.transitions !== undefined;
-  const hasIncrement = left.increment !== undefined || right.increment !== undefined;
   return {
     ...right,
     input: (left.input * leftWeight + right.input * rightWeight) / sampleCount,
@@ -217,15 +214,9 @@ function mergePreviewPoints(
     calibrated_min: Math.min(left.calibrated_min, right.calibrated_min),
     calibrated_max: Math.max(left.calibrated_max, right.calibrated_max),
     sample_count: sampleCount,
-    active_samples: hasActiveSamples
-      ? (left.active_samples ?? 0) + (right.active_samples ?? 0)
-      : undefined,
-    transitions: hasTransitions
-      ? (left.transitions ?? 0) + (right.transitions ?? 0)
-      : undefined,
-    increment: hasIncrement
-      ? (left.increment ?? 0) + (right.increment ?? 0)
-      : undefined,
+    active_samples: left.active_samples + right.active_samples,
+    transitions: left.transitions + right.transitions,
+    increment: left.increment + right.increment,
   };
 }
 
@@ -377,7 +368,7 @@ function previewSessionPoints(
 }
 
 function latestPreviewPoint(payload: PreviewBody): PreviewPoint | undefined {
-  return payload.latest_point ?? payload.points?.at(-1) ?? undefined;
+  return payload.latest_point ?? payload.points.at(-1);
 }
 
 function hasMeaningfulResult(points: PreviewPoint[]): boolean {
@@ -391,7 +382,7 @@ function hasMeaningfulResult(points: PreviewPoint[]): boolean {
 }
 
 function counterWindowDelta(payload: PreviewBody): number {
-  const points = payload.points ?? [];
+  const points = payload.points;
   const window = previewWindow(payload, points);
   return points.reduce((total, point) => {
     const at = pointPlotAt(point);
@@ -920,7 +911,7 @@ function renderPreviewChart(
   sharedWindow?: PreviewTimeWindow,
   sessionWide = false,
 ): PreviewPoint[] {
-  const points = payload.points ?? [];
+  const points = payload.points;
   const window = sharedWindow ?? previewWindow(payload, points);
   renderSignalChart(svg, {
     points: points.map((point) => ({
@@ -949,9 +940,7 @@ function renderPreviewChart(
       showSemanticOverlays &&
       payload.kind !== "numeric" &&
       payload.kind !== "cumulative_counter",
-    thresholds: showSemanticOverlays
-      ? { rise: payload.rise_threshold, fall: payload.fall_threshold }
-      : undefined,
+    thresholds: undefined,
     emptyTitle: payload.error
       ? "このルールでは受信値を判定できません"
       : "まだ受信データがありません",
@@ -962,12 +951,6 @@ function renderPreviewChart(
       `縦軸は受信値${unit ? `（${unit}）` : ""}${showResult ? "と設定結果" : ""}です。`,
   });
   return points;
-}
-
-function isMultipleRulePreview(
-  response: MappingPreviewResponse,
-): response is components["schemas"]["MultipleRuleMappingPreview"] {
-  return "rules" in response;
 }
 
 function activeSettingPanel(scope: HTMLElement): HTMLElement | undefined {
@@ -1057,18 +1040,14 @@ function selectPreview(
   response: MappingPreviewResponse,
   activeID?: string,
 ): PreviewSelection {
-  if (!isMultipleRulePreview(response)) {
-    return { raw: response, selected: null };
-  }
   const withWindow = (
     rule: SemanticRulePreview | undefined,
-  ): SemanticRulePreview | null =>
+  ): (SemanticRulePreview & PreviewBody) | null =>
     rule
       ? {
           ...rule,
           window_start: response.window_start,
           window_end: response.window_end,
-          truncated_by: response.truncated_by,
         }
       : null;
   return {
@@ -1087,12 +1066,10 @@ function rawOnlyPreview(payload: PreviewBody): PreviewBody {
   return {
     ...payload,
     kind: "numeric",
-    rise_threshold: undefined,
-    fall_threshold: undefined,
-    points: (payload.points ?? []).map(rawPreviewPoint),
+    points: payload.points.map(rawPreviewPoint),
     latest_point: payload.latest_point
       ? rawPreviewPoint(payload.latest_point)
-      : undefined,
+      : null,
   };
 }
 
@@ -1100,49 +1077,38 @@ function buildRequest(
   signalRef: string,
   forms: HTMLFormElement[],
   calibrationForm: HTMLFormElement | null,
-  multipleRules: boolean,
   activeID?: string,
 ): MappingPreviewRequest {
-  const body: MappingPreviewRequest = { signal_ref: signalRef };
-  const firstForm = forms[0];
-  if (multipleRules) {
-    const rules = forms
-      .filter((candidate) => {
-        const previewID = candidate.dataset.previewId;
-        const hasName = !!formField(candidate, "display_name")?.value.trim();
-        return !!previewID && (hasName || previewID === activeID);
-      })
-      .map((candidate) => ({
-        rule_id: candidate.dataset.previewId!,
-        display_name:
-          formField(candidate, "display_name")?.value.trim() ||
-          (candidate.dataset.previewId === "draft-alarm"
-            ? "新しい異常検知"
-            : "新しい計測ルール"),
-        spec: ruleSpec(candidate),
-      }));
-    if (!rules.length) {
-      rules.push({
-        rule_id: "draft-raw",
-        display_name: "受信値",
-        spec: { kind: "numeric" },
-      });
-    }
-    if (rules.length) {
-      body.calibration = {
-        scale: calibrationForm
-          ? numericFormField(calibrationForm, "scale")
-          : 1,
-        offset: calibrationForm
-          ? numericFormField(calibrationForm, "offset")
-          : 0,
-      };
-      body.rules = rules;
-    }
-  } else if (firstForm) {
-    body.spec = definitionSpec(firstForm);
+  const rules = forms
+    .filter((candidate) => {
+      const previewID = candidate.dataset.previewId;
+      const hasName = !!formField(candidate, "display_name")?.value.trim();
+      return !!previewID && (hasName || previewID === activeID);
+    })
+    .map((candidate) => ({
+      rule_id: candidate.dataset.previewId!,
+      display_name:
+        formField(candidate, "display_name")?.value.trim() ||
+        (candidate.dataset.previewId === "draft-alarm"
+          ? "新しい異常検知"
+          : "新しい計測ルール"),
+      spec: ruleSpec(candidate),
+    }));
+  if (!rules.length) {
+    rules.push({
+      rule_id: "draft-raw",
+      display_name: "受信値",
+      spec: { kind: "numeric" },
+    });
   }
-  return body;
+  return {
+    signal_ref: signalRef,
+    calibration: {
+      scale: calibrationForm ? numericFormField(calibrationForm, "scale") : 1,
+      offset: calibrationForm ? numericFormField(calibrationForm, "offset") : 0,
+    },
+    rules,
+  };
 }
 
 function initializePreview(panel: HTMLElement): void {
@@ -1156,9 +1122,6 @@ function initializePreview(panel: HTMLElement): void {
   const calibrationForm = query<HTMLFormElement>(
     `form[action="/console/signals/${signalRef}/calibration"]`,
   );
-  const multipleRules =
-    forms.some((form) => !!form.dataset.ruleId) ||
-    forms.some((form) => form.action.endsWith("/semantic-rules"));
   const rawBoolean = forms.some(
     (form) => form.dataset.booleanInput === "true",
   );
@@ -1258,15 +1221,11 @@ function initializePreview(panel: HTMLElement): void {
   const setSemanticLegends = (
     semanticVisible: boolean,
     resultVisible: boolean,
-    payload?: PreviewBody | null,
+    _payload?: PreviewBody | null,
   ): void => {
     if (resultLegend) resultLegend.hidden = !resultVisible;
     if (thresholdLegend) {
-      thresholdLegend.hidden =
-        !semanticVisible ||
-        !payload ||
-        (!isFiniteNumber(payload.rise_threshold) &&
-          !isFiniteNumber(payload.fall_threshold));
+      thresholdLegend.hidden = true;
     }
   };
 
@@ -1547,7 +1506,6 @@ function initializePreview(panel: HTMLElement): void {
       signalRef,
       forms,
       calibrationForm,
-      multipleRules,
       activeID,
     );
     try {
@@ -1680,14 +1638,12 @@ function initializePreview(panel: HTMLElement): void {
             `${points.length.toLocaleString("ja-JP")}bucketを表示`;
           setText(
             message,
-            payload.truncated_by === "input_count"
-              ? "高速な信号のため、最新20,000件を要約しています。"
-              : payload.kind === "cumulative_counter"
-                ? `この設定なら直近60秒で +${formatNumber(counterWindowDelta(payload))}。` +
-                  counterPreviewMessage(state)
-                : !showResult
-                  ? "変換前後の値は同じです。補正を変更すると差を確認できます。"
-                  : "設定を変えると、保存前の結果をこのグラフで確認できます。",
+            payload.kind === "cumulative_counter"
+              ? `この設定なら直近60秒で +${formatNumber(counterWindowDelta(payload))}。` +
+                counterPreviewMessage(state)
+              : !showResult
+                ? "変換前後の値は同じです。補正を変更すると差を確認できます。"
+                : "設定を変えると、保存前の結果をこのグラフで確認できます。",
           );
         }
         if (selectedFailure) {

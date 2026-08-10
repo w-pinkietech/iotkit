@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+};
 
 use iotkit_edge::{
     application::accounts::AccountService,
@@ -18,6 +21,10 @@ fn test_directory() -> tempfile::TempDir {
         .join("test-tmp");
     std::fs::create_dir_all(&root).unwrap();
     tempfile::TempDir::new_in(root).unwrap()
+}
+
+fn object_keys(value: &serde_json::Value) -> BTreeSet<String> {
+    value.as_object().unwrap().keys().cloned().collect()
 }
 
 #[tokio::test]
@@ -119,7 +126,7 @@ async fn empty_mapping_preview_returns_a_nullable_latest_point() {
     let signal_ref = storage.inventory_signals().await.unwrap()[0]
         .signal_ref
         .clone();
-    let application = StorageWebApplication::new(storage);
+    let application = StorageWebApplication::new(storage.clone());
     let principal = application
         .login("owner", &password)
         .await
@@ -154,6 +161,153 @@ async fn empty_mapping_preview_returns_a_nullable_latest_point() {
     assert_eq!(rule["plot_count"], 0);
     assert_eq!(rule["points"], serde_json::json!([]));
     assert_eq!(rule["latest_point"], serde_json::Value::Null);
+    assert_eq!(response.body["window_start"], serde_json::Value::Null);
+    assert_eq!(response.body["window_end"], serde_json::Value::Null);
+    assert_eq!(rule["test_result"], serde_json::Value::Null);
+    assert_eq!(
+        object_keys(&response.body),
+        BTreeSet::from([
+            "calibration".into(),
+            "rules".into(),
+            "window_start".into(),
+            "window_end".into(),
+        ])
+    );
+    assert_eq!(
+        object_keys(&response.body["calibration"]),
+        BTreeSet::from(["scale".into(), "offset".into()])
+    );
+    assert_eq!(
+        object_keys(rule),
+        BTreeSet::from([
+            "rule_id".into(),
+            "display_name".into(),
+            "kind".into(),
+            "input_count".into(),
+            "plot_count".into(),
+            "points".into(),
+            "latest_point".into(),
+            "test_result".into(),
+            "error".into(),
+        ])
+    );
+
+    let record = serde_json::json!({
+        "family": "measurement",
+        "schema_version": 1,
+        "epoch": descriptor.ledger_epoch,
+        "pub_seq": 1,
+        "series_key": descriptor.signals[0].series_key,
+        "values": [1.0],
+        "event_time": 10,
+        "received_at": 10,
+    });
+    storage
+        .accept_batch(AcceptBatch {
+            edge_node_id: descriptor.edge_node_id,
+            ledger_epoch: descriptor.ledger_epoch,
+            publication_id: "mapping-preview-shape".into(),
+            received_at: 10,
+            records: vec![RawRecord::new(1, serde_json::to_vec(&record).unwrap()).unwrap()],
+        })
+        .await
+        .unwrap();
+    let populated = application
+        .mutate(
+            &principal,
+            ApiMutation::Named {
+                method: axum::http::Method::POST,
+                route: "/api/v1/mapping-previews".into(),
+                params: HashMap::new(),
+                expected_revision: None,
+            },
+            serde_json::json!({
+                "signal_ref": signal_ref,
+                "calibration": {"scale": 1.0, "offset": 0.0},
+                "test_value": 1.0,
+                "rules": [{
+                    "rule_id": "draft-empty-preview",
+                    "display_name": "No readings yet",
+                    "spec": {"kind": "numeric"}
+                }]
+            }),
+        )
+        .await
+        .unwrap();
+    let point = &populated.body["rules"][0]["points"][0];
+    assert_eq!(
+        object_keys(point),
+        BTreeSet::from([
+            "received_at".into(),
+            "plot_at".into(),
+            "input".into(),
+            "input_min".into(),
+            "input_max".into(),
+            "calibrated".into(),
+            "calibrated_min".into(),
+            "calibrated_max".into(),
+            "active".into(),
+            "counter".into(),
+            "sample_count".into(),
+            "active_samples".into(),
+            "transitions".into(),
+            "increment".into(),
+        ])
+    );
+    assert_eq!(point["active"], serde_json::Value::Null);
+    assert_eq!(point["counter"], serde_json::Value::Null);
+    let result = &populated.body["rules"][0]["test_result"];
+    assert_eq!(
+        object_keys(result),
+        BTreeSet::from([
+            "emitted".into(),
+            "number".into(),
+            "boolean".into(),
+            "integer".into(),
+            "calibrated".into(),
+        ])
+    );
+    assert_eq!(result["boolean"], serde_json::Value::Null);
+    assert_eq!(result["integer"], serde_json::Value::Null);
+
+    let schema = include_str!("../openapi/edge-console-v1.yaml");
+    assert!(schema.contains(
+        "schema:\n                $ref: \"#/components/schemas/MultipleRuleMappingPreview\""
+    ));
+    assert!(!schema.contains("    MappingPreview:\n"));
+    for fragment in [
+        "PreviewCalibration:\n      type: object\n      additionalProperties: false\n      required: [scale, offset]",
+        "required: [calibration, rules, window_start, window_end]",
+        "required: [rule_id, display_name, kind, input_count, plot_count, points, latest_point, test_result, error]",
+        "required: [emitted, number, boolean, integer, calibrated]",
+    ] {
+        assert!(schema.contains(fragment), "OpenAPI missing {fragment}");
+    }
+    let point_schema = schema
+        .split_once("    PreviewPoint:\n")
+        .expect("PreviewPoint schema")
+        .1
+        .split_once("    PreviewResult:\n")
+        .expect("PreviewPoint schema end")
+        .0;
+    for key in [
+        "received_at",
+        "plot_at",
+        "input",
+        "input_min",
+        "input_max",
+        "calibrated",
+        "calibrated_min",
+        "calibrated_max",
+        "active",
+        "counter",
+        "sample_count",
+        "active_samples",
+        "transitions",
+        "increment",
+    ] {
+        assert!(point_schema.contains(&format!("        - {key}\n")));
+    }
 }
 
 #[tokio::test]

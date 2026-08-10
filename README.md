@@ -13,6 +13,8 @@ until IoTKit Edge has durably stored it.
 > early source release. APIs, the on-disk schema, and wire contracts may change
 > during the 0.x series. See [GitHub Releases](https://github.com/w-pinkietech/iotkit/releases)
 > and the [Roadmap](#roadmap).
+> The [v1 compatibility policy](docs/product/en/contracts/compatibility-policy-v1.md)
+> takes effect at product 1.0.0 and does not change this pre-1.0 status.
 
 Current product knowledge is also available as an OKF v0.2 bundle in
 [Japanese](docs/product/ja/index.md) and [English](docs/product/en/index.md).
