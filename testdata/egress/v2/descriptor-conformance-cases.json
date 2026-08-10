@@ -1,0 +1,498 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "canonical_uuid_revision_one",
+      "valid": true,
+      "reason_category": "valid",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "canonical_uuid_revision_i64_max",
+      "valid": true,
+      "reason_category": "valid",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 9223372036854775807,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "optional_descriptor_fields_omitted",
+      "valid": true,
+      "reason_category": "valid",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 2,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "state": "active"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "variant": "primary",
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "noncanonical_uppercase_uuid",
+      "valid": false,
+      "reason_category": "noncanonical_uuid",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018F0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018F0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018F0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "noncanonical_compact_uuid",
+      "valid": false,
+      "reason_category": "noncanonical_uuid",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000000070008000000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000000070008000000000000001:contact_state:na:primary",
+            "system_id": "018f0000000070008000000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "descriptor_revision_zero",
+      "valid": false,
+      "reason_category": "descriptor_revision",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 0,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "descriptor_revision_above_i64_max",
+      "valid": false,
+      "reason_category": "descriptor_revision",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 9223372036854775808,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "measurement_key_exact_64_bytes",
+      "valid": true,
+      "reason_category": "valid",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "measurement_key_over_64_bytes",
+      "valid": false,
+      "reason_category": "measurement_key",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "measurement_key_invalid_segment",
+      "valid": false,
+      "reason_category": "measurement_key",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 6,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:custom..tank_temp:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "custom..tank_temp",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown_descriptor_field",
+      "valid": false,
+      "reason_category": "unknown_field",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ],
+        "unexpected": true
+      }
+    },
+    {
+      "name": "unknown_descriptor_schema_version",
+      "valid": false,
+      "reason_category": "schema_version",
+      "descriptor": {
+        "schema_version": 3,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "edge_node_id_over_255_bytes",
+      "valid": false,
+      "reason_category": "identity_boundary",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "edge_node_id_control_character",
+      "valid": false,
+      "reason_category": "identity_control",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-\u0001",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ledger_epoch_control_character",
+      "valid": false,
+      "reason_category": "identity_control",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-\u0001",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:primary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "primary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "variant_control_character",
+      "valid": false,
+      "reason_category": "identity_control",
+      "descriptor": {
+        "schema_version": 2,
+        "edge_node_id": "edge-node-01",
+        "ledger_epoch": "epoch-01",
+        "descriptor_revision": 1,
+        "complete": true,
+        "devices": [
+          {
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "identifier": "01234567",
+            "state": "active",
+            "model_id": "mcp9600"
+          }
+        ],
+        "signals": [
+          {
+            "series_key": "018f0000-0000-7000-8000-000000000001:contact_state:na:prim\u0001ary",
+            "system_id": "018f0000-0000-7000-8000-000000000001",
+            "measurement_key": "contact_state",
+            "channel_index": null,
+            "variant": "prim\u0001ary",
+            "unit": null,
+            "value_type": "bool"
+          }
+        ]
+      }
+    }
+  ]
+}

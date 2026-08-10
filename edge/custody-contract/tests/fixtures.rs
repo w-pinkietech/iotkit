@@ -1,9 +1,29 @@
 use iotkit_edge_custody_contract::{
-    AcceptedThrough, ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
-    RecoveryActivationRequest, RecoveryActivationResult, RecoveryCompletion, RecoveryCompletionAck,
-    StatusHeartbeat,
+    AcceptedThrough, ActivationRequest, ActivationResult, ContractError, DescriptorSnapshot,
+    MAX_DESCRIPTOR_BYTES, RecordBatch, RecoveryActivationRequest, RecoveryActivationResult,
+    RecoveryCompletion, RecoveryCompletionAck, StatusHeartbeat,
 };
 use serde::Deserialize;
+use std::collections::HashSet;
+
+const EXPECTED_DESCRIPTOR_CASES: [(&str, &str); 16] = [
+    ("canonical_uuid_revision_one", "valid"),
+    ("canonical_uuid_revision_i64_max", "valid"),
+    ("optional_descriptor_fields_omitted", "valid"),
+    ("noncanonical_uppercase_uuid", "noncanonical_uuid"),
+    ("noncanonical_compact_uuid", "noncanonical_uuid"),
+    ("descriptor_revision_zero", "descriptor_revision"),
+    ("descriptor_revision_above_i64_max", "descriptor_revision"),
+    ("measurement_key_exact_64_bytes", "valid"),
+    ("measurement_key_over_64_bytes", "measurement_key"),
+    ("measurement_key_invalid_segment", "measurement_key"),
+    ("unknown_descriptor_field", "unknown_field"),
+    ("unknown_descriptor_schema_version", "schema_version"),
+    ("edge_node_id_over_255_bytes", "identity_boundary"),
+    ("edge_node_id_control_character", "identity_control"),
+    ("ledger_epoch_control_character", "identity_control"),
+    ("variant_control_character", "identity_control"),
+];
 
 type StatusMutation = Box<dyn Fn(&mut serde_json::Value)>;
 
@@ -17,6 +37,22 @@ struct RecordFamilyCase {
     name: String,
     valid: bool,
     record: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DescriptorConformanceCases {
+    schema_version: u32,
+    cases: Vec<DescriptorConformanceCase>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DescriptorConformanceCase {
+    name: String,
+    valid: bool,
+    reason_category: String,
+    descriptor: serde_json::Value,
 }
 
 fn fixture(path: &str) -> Vec<u8> {
@@ -145,6 +181,87 @@ fn decodes_descriptor_and_activation_fixtures_strictly() {
         .expect("decode activation request");
     ActivationResult::decode(&fixture("testdata/egress/v1/activation-result.json"))
         .expect("decode activation result");
+}
+
+#[test]
+fn descriptor_decode_accepts_exact_limit_and_rejects_one_byte_over() {
+    let mut payload = fixture("testdata/egress/v2/descriptor-snapshot.json");
+    payload.resize(MAX_DESCRIPTOR_BYTES, b' ');
+    assert_eq!(payload.len(), MAX_DESCRIPTOR_BYTES);
+    DescriptorSnapshot::decode(&payload).expect("valid descriptor at exact byte limit");
+
+    payload.push(b' ');
+    let error =
+        DescriptorSnapshot::decode(&payload).expect_err("descriptor over byte limit must fail");
+    let ContractError::Invalid(message) = error else {
+        panic!("unexpected descriptor decoding error");
+    };
+    assert_eq!(message, "descriptor exceeds encoded byte limit");
+}
+
+#[test]
+fn receiver_matches_the_shared_descriptor_conformance_cases() {
+    let cases: DescriptorConformanceCases = serde_json::from_slice(&fixture(
+        "testdata/egress/v2/descriptor-conformance-cases.json",
+    ))
+    .expect("decode shared descriptor conformance corpus");
+    assert_eq!(
+        cases.schema_version, 1,
+        "unsupported descriptor corpus version"
+    );
+    assert!(
+        !cases.cases.is_empty(),
+        "descriptor corpus must not be empty"
+    );
+    let mut names = HashSet::with_capacity(cases.cases.len());
+    for case in &cases.cases {
+        assert!(
+            names.insert(case.name.as_str()),
+            "duplicate descriptor case name: {}",
+            case.name
+        );
+        assert_eq!(
+            case.valid,
+            case.reason_category == "valid",
+            "descriptor corpus validity/category mismatch: {}",
+            case.name
+        );
+    }
+    let actual: Vec<(&str, &str)> = cases
+        .cases
+        .iter()
+        .map(|case| (case.name.as_str(), case.reason_category.as_str()))
+        .collect();
+    assert_eq!(
+        actual.as_slice(),
+        EXPECTED_DESCRIPTOR_CASES.as_slice(),
+        "descriptor corpus names/categories changed"
+    );
+
+    for case in cases.cases {
+        let payload = serde_json::to_vec(&case.descriptor).expect("encode descriptor case");
+        let result = DescriptorSnapshot::decode(&payload);
+        assert_eq!(
+            result.is_ok(),
+            case.valid,
+            "conformance case outcome: {} ({})",
+            case.name,
+            case.reason_category,
+        );
+        match result {
+            Ok(_) => assert!(case.valid, "accepted invalid case: {}", case.name),
+            Err(ContractError::Decode(_)) => assert_eq!(
+                case.reason_category, "unknown_field",
+                "decode category: {}",
+                case.name,
+            ),
+            Err(ContractError::Invalid(message)) => assert_eq!(
+                message, case.reason_category,
+                "conformance reason category: {}",
+                case.name,
+            ),
+        }
+    }
 }
 
 #[test]
