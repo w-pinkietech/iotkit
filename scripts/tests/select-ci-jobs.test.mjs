@@ -106,6 +106,11 @@ const cases = [
     expected: allHeavy("all"),
   },
   {
+    name: "mise toolchain changes select all heavy jobs",
+    paths: ["mise.toml"],
+    expected: allHeavy("all"),
+  },
+  {
     name: "Rust IoTKit Edge storage selects Edge integration without Console",
     paths: ["edge/src/storage/mod.rs"],
     expected: rustEdge("iotkit-edge"),

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 const rustFiles = new Set([
   "Cargo.lock",
   "Cargo.toml",
+  "mise.toml",
   "rust-toolchain.toml",
 ]);
 

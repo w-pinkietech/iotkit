@@ -47,26 +47,36 @@ changing code**表を使い、変更に該当する行だけを読んでくだ�
 
 ## 開発環境
 
-対応する開発環境はLinuxです。現在のCIは次を使います。
+対応する開発環境はLinuxです。repository rootで`mise install`を実行すると、
+`mise.toml`に固定した言語・CLI toolを導入できます。CIも同じ`mise.toml`を
+`jdx/mise-action`経由で使用します。
 
-- `rust-toolchain.toml`が自動選択するRust 1.95.0
+- rustfmtとclippyを含むRust 1.95.0
 - Console assetとtest用のNode.js 22、npm
+- trial script用のPython 3.11
+- trial validationとintegration test用のjq 1.8.2
+- integration test用のSQLite 3.53.4
+- Rust test用の`cargo-nextest` 0.9.143
 - Raspberry Pi transport依存の`pkg-config`、`libudev-dev`
 
-統合testにはDocker Compose、OpenSSL、`jq`、`curl`も必要です。通常の開発loopに
-Raspberry Piや実センサーは必要ありません。
+統合testのDocker Compose、OpenSSL、`curl`はhost dependencyとして残り、`mise`では
+管理しません。通常の開発loopにRaspberry Piや実センサーは必要ありません。
+
+```bash
+mise install
+mise exec -- node --version
+mise exec -- cargo --version
+```
 
 DebianまたはUbuntuでは、言語以外のpackageを次で導入できます。
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
-  openssl jq curl
+sudo apt-get install --yes build-essential pkg-config libudev-dev docker.io docker-compose-v2 \
+  openssl curl
 ```
 
-Rustは[rustup](https://rustup.rs/)、Node.js 22は通常使うpackage managerで
-導入してください。credential、生成した証明書、local DB、deployment出力directoryを
-commitしてはいけません。
+credential、生成した証明書、local DB、deployment出力directoryをcommitしてはいけません。
 
 通常の開発でhostの全coreを使い切らないよう、repositoryのCargo既定値はcompiler jobと
 Rust test threadをそれぞれ4に制限します。既存の環境変数が優先されるため、必要な場合は
