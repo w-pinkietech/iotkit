@@ -179,11 +179,6 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-
       - name: Formatting (cargo fmt --check)
         # Full tree; fmt is seconds, not the bottleneck.
         run: cargo fmt --all --check

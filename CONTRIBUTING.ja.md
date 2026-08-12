@@ -55,6 +55,8 @@ changing code**表を使い、変更に該当する行だけを読んでくだ�
 - Console assetとtest用のNode.js 22、npm
 - trial script用のPython 3.11
 - trial validationとintegration test用のjq 1.8.2
+- integration test用のSQLite 3.53.4
+- Rust test用の`cargo-nextest` 0.9.143
 - Raspberry Pi transport依存の`pkg-config`、`libudev-dev`
 
 統合testのDocker Compose、OpenSSL、`curl`はhost dependencyとして残り、`mise`では
@@ -70,7 +72,7 @@ DebianまたはUbuntuでは、言語以外のpackageを次で導入できます�
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
+sudo apt-get install --yes build-essential pkg-config libudev-dev docker.io docker-compose-v2 \
   openssl curl
 ```
 

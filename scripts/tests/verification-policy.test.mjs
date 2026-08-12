@@ -364,6 +364,17 @@ test("current guidance keeps workspace diagnosis explicit", () => {
   }
 });
 
+test("CI uses mise for managed tools", () => {
+  const workflow = ci();
+  for (const job of ["changes", "lightweight", "check", "console", "edge", "trial"]) {
+    assert.match(jobSection(workflow, job), /jdx\/mise-action@v4/, `${job} uses mise`);
+  }
+  assert.doesNotMatch(
+    workflow,
+    /actions\/setup-(?:node|python)|taiki-e\/install-action|cargo install[^\n]*(?:cargo-nextest|nextest)|apt-get install[^\n]*(?:jq|sqlite3?)/,
+  );
+});
+
 test("required CI derives every selected lane from the selector and executes its real guard", () => {
   const workflow = ci();
   const aggregate = jobSection(workflow, "required-ci");

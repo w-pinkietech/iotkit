@@ -5,3 +5,5 @@ rust = { version = "1.95.0", components = "rustfmt,clippy" }
 node = "22"
 python = "3.11"
 jq = "1.8.2"
+sqlite = "3.53.4"
+"cargo:cargo-nextest" = "0.9.143"

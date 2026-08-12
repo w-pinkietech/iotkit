@@ -58,6 +58,8 @@ CI uses the same `mise.toml` through `jdx/mise-action`.
 - Node.js 22 and npm for Console assets and tests;
 - Python 3.11 for trial scripts;
 - `jq` 1.8.2 for trial validation and integration tests;
+- SQLite 3.53.4 for integration tests;
+- `cargo-nextest` 0.9.143 for Rust tests;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
 Docker Compose, OpenSSL, and `curl` remain host dependencies for the integration
@@ -74,7 +76,7 @@ On Debian or Ubuntu, the non-language packages can be installed with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
+sudo apt-get install --yes build-essential pkg-config libudev-dev docker.io docker-compose-v2 \
   openssl curl
 ```
 
