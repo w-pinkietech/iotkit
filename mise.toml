@@ -1,0 +1,7 @@
+# Repository language and CLI tools. Docker/Compose and native packages remain
+# host dependencies; see CONTRIBUTING.md for their installation.
+[tools]
+rust = { version = "1.95.0", components = "rustfmt,clippy" }
+node = "22"
+python = "3.11"
+jq = "1.8.2"

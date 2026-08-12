@@ -37,9 +37,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: jdx/mise-action@v4
         with:
-          node-version: 22
+          version: 2026.8.4
 
       - name: Classify changed paths
         id: select
@@ -67,9 +67,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: jdx/mise-action@v4
         with:
-          node-version: 22
+          version: 2026.8.4
 
       - name: Product release version consistency
         run: |
@@ -157,14 +157,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.8.4
+
       # serialport (via rpi4b-transport → adapters → iotkit-edge-node) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's
       # present on dev machines but not on a clean runner.
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev
 
-      # rustup honors rust-toolchain.toml (channel 1.95.0 + rustfmt + clippy),
-      # so the toolchain is pinned and reproducible with local dev.
+      # mise honors mise.toml (Rust 1.95.0 + rustfmt + clippy), so the
+      # toolchain is pinned and reproducible with local dev.
       - name: Show toolchain
         run: |
           rustup show
@@ -245,11 +249,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: jdx/mise-action@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: edge/frontend/package-lock.json
+          version: 2026.8.4
 
       - name: Install Console tooling
         run: npm ci --prefix edge/frontend
@@ -267,6 +269,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.8.4
 
       # Unit/integration for iotkit-edge run in the rust job when rust=true.
       # This job is custody + durable output only (Console is the console job).
@@ -287,6 +293,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.8.4
 
       - name: Trial profile first-run and custody journey
         run: scripts/test-iotkit-trial.sh

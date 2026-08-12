@@ -50,27 +50,36 @@ to that change. Work is issue-driven; see [`.agents/workflow.md`](.agents/workfl
 
 ## Development environment
 
-The supported contributor environment is Linux. CI currently uses:
+The supported contributor environment is Linux. Run `mise install` from the
+repository root to install the language and CLI tools pinned in `mise.toml`.
+CI uses the same `mise.toml` through `jdx/mise-action`.
 
-- Rust 1.95.0, selected automatically by `rust-toolchain.toml`;
+- Rust 1.95.0 with `rustfmt` and `clippy`;
 - Node.js 22 and npm for Console assets and tests;
+- Python 3.11 for trial scripts;
+- `jq` 1.8.2 for trial validation and integration tests;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
-Docker Compose, OpenSSL, `jq`, and `curl` are also required for the integration
-scripts. No Raspberry Pi or physical sensor is needed for the normal development
-loop.
+Docker Compose, OpenSSL, and `curl` remain host dependencies for the integration
+scripts and are not managed by `mise`. No Raspberry Pi or physical sensor is
+needed for the normal development loop.
+
+```bash
+mise install
+mise exec -- node --version
+mise exec -- cargo --version
+```
 
 On Debian or Ubuntu, the non-language packages can be installed with:
 
 ```bash
 sudo apt-get update
 sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
-  openssl jq curl
+  openssl curl
 ```
 
-Install Rust through [rustup](https://rustup.rs/) and Node.js 22 through your
-normal package manager. Do not commit credentials, generated certificates,
-local databases, or deployment output directories.
+Do not commit credentials, generated certificates, local databases, or deployment
+output directories.
 
 Repository Cargo defaults keep compiler jobs and Rust test threads at four so
 normal development does not consume every host core. Existing environment
