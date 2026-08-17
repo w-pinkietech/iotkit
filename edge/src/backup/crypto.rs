@@ -119,8 +119,7 @@ pub(super) fn encrypt(
 
 fn random_bytes<const N: usize>() -> Result<[u8; N], BackupError> {
     let mut bytes = [MaybeUninit::uninit(); N];
-    let initialized = getrandom::fill_uninit(&mut bytes)
-        .map_err(|_| BackupError::Cryptography)?;
+    let initialized = getrandom::fill_uninit(&mut bytes).map_err(|_| BackupError::Cryptography)?;
     <[u8; N]>::try_from(initialized).map_err(|_| BackupError::Cryptography)
 }
 

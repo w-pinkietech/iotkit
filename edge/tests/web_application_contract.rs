@@ -48,10 +48,7 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
         .unwrap();
 
     let application = StorageWebApplication::new(storage);
-    let login = application
-        .login("owner", &password)
-        .await
-        .unwrap();
+    let login = application.login("owner", &password).await.unwrap();
     let principal = application.authenticate(&login.token).await.unwrap();
     assert_eq!(principal.login_id, "owner");
     assert!(application.validate_csrf(&login.token, &login.csrf).await);
@@ -1111,10 +1108,7 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
         "new PostgreSQL semantic rule must be visible before revision"
     );
     let application = StorageWebApplication::new(storage);
-    let login = application
-        .login("postgres-test", &password)
-        .await
-        .unwrap();
+    let login = application.login("postgres-test", &password).await.unwrap();
     let revised = application
         .mutate(
             &login.principal,
