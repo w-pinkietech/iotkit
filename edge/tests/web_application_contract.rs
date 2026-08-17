@@ -29,6 +29,8 @@ fn object_keys(value: &serde_json::Value) -> BTreeSet<String> {
 
 #[tokio::test]
 async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
+    let viewer_password = format!("viewer-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("edge.db"),
@@ -39,17 +41,14 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
         .unwrap();
 
     let application = StorageWebApplication::new(storage);
-    let login = application
-        .login("owner", "long enough owner password")
-        .await
-        .unwrap();
+    let login = application.login("owner", &password).await.unwrap();
     let principal = application.authenticate(&login.token).await.unwrap();
     assert_eq!(principal.login_id, "owner");
     assert!(application.validate_csrf(&login.token, &login.csrf).await);
@@ -88,7 +87,7 @@ async fn production_web_adapter_owns_sessions_and_reads_operator_views() {
                 "login_id": "viewer",
                 "display_name": "Read Only",
                 "role": "viewer",
-                "temporary_password": "long enough viewer password",
+                "temporary_password": viewer_password,
             }),
         )
         .await
@@ -312,6 +311,7 @@ async fn empty_mapping_preview_returns_a_nullable_latest_point() {
 
 #[tokio::test]
 async fn activation_response_does_not_expose_internal_command_identity() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("activation-response.db"),
@@ -322,7 +322,7 @@ async fn activation_response_does_not_expose_internal_command_identity() {
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -334,7 +334,7 @@ async fn activation_response_does_not_expose_internal_command_identity() {
     storage.apply_descriptor(&descriptor, 1).await.unwrap();
     let application = StorageWebApplication::new(storage);
     let principal = application
-        .login("owner", "long enough owner password")
+        .login("owner", &password)
         .await
         .unwrap()
         .principal;
@@ -362,6 +362,7 @@ async fn activation_response_does_not_expose_internal_command_identity() {
 
 #[tokio::test]
 async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing_rule() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("first-rule.db"),
@@ -372,7 +373,7 @@ async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -395,7 +396,7 @@ async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing
         .unwrap();
     let application = StorageWebApplication::new(storage);
     let principal = application
-        .login("owner", "long enough owner password")
+        .login("owner", &password)
         .await
         .unwrap()
         .principal;
@@ -433,6 +434,7 @@ async fn first_semantic_rule_resolves_a_new_inventory_signal_without_an_existing
 
 #[tokio::test]
 async fn console_commissioning_distinguishes_discovery_registration_and_setup() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("console-state.db"),
@@ -447,7 +449,7 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_720_000_000_000,
         )
         .await
@@ -461,7 +463,7 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
     storage.apply_descriptor(&descriptor, 1).await.unwrap();
     let application = StorageWebApplication::new(storage.clone());
     let principal = application
-        .login("owner", "long enough owner password")
+        .login("owner", &password)
         .await
         .unwrap()
         .principal;
@@ -721,6 +723,8 @@ async fn console_commissioning_distinguishes_discovery_registration_and_setup() 
 
 #[tokio::test]
 async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
+    let wrong_password = format!("wrong-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("rate-limit.db"),
@@ -731,7 +735,7 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -749,13 +753,13 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
     let mut limited_responses = Vec::new();
     for login_id in ["owner", "missing"] {
         let error = application
-            .login(login_id, "wrong password")
+            .login(login_id, &wrong_password)
             .await
             .unwrap_err();
         assert_eq!(error.status, axum::http::StatusCode::UNAUTHORIZED);
         assert_eq!(error.code, "invalid_credentials");
         let limited = application
-            .login(login_id, "wrong password")
+            .login(login_id, &wrong_password)
             .await
             .unwrap_err();
         assert_eq!(limited.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
@@ -768,7 +772,7 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
     }
     assert_eq!(limited_responses[0], limited_responses[1]);
     let variant = application
-        .login(" OWNER ", "wrong password")
+        .login(" OWNER ", &wrong_password)
         .await
         .expect_err("login identifier variants must share one failure bucket");
     assert_eq!(variant.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
@@ -784,7 +788,7 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
     );
     assert_eq!(
         recovering
-            .login("missing", "wrong password")
+            .login("missing", &wrong_password)
             .await
             .unwrap_err()
             .status,
@@ -792,7 +796,7 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
     );
     assert_eq!(
         recovering
-            .login("missing", "wrong password")
+            .login("missing", &wrong_password)
             .await
             .unwrap_err()
             .status,
@@ -800,7 +804,7 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
     );
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     let recovered = recovering
-        .login("missing", "wrong password")
+        .login("missing", &wrong_password)
         .await
         .expect_err("unknown account remains invalid after recovery");
     assert_eq!(recovered.status, axum::http::StatusCode::UNAUTHORIZED);
@@ -808,6 +812,8 @@ async fn login_rate_limit_is_non_enumerating_and_recovers_after_its_window() {
 
 #[tokio::test]
 async fn unknown_login_performs_the_same_password_verification_work() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
+    let wrong_password = format!("wrong-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("login-timing.db"),
@@ -818,7 +824,7 @@ async fn unknown_login_performs_the_same_password_verification_work() {
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -827,14 +833,14 @@ async fn unknown_login_performs_the_same_password_verification_work() {
 
     let known_started = std::time::Instant::now();
     application
-        .login("owner", "wrong password")
+        .login("owner", &wrong_password)
         .await
         .expect_err("known account password is invalid");
     let known_elapsed = known_started.elapsed();
 
     let unknown_started = std::time::Instant::now();
     application
-        .login("missing", "wrong password")
+        .login("missing", &wrong_password)
         .await
         .expect_err("unknown account is invalid");
     let unknown_elapsed = unknown_started.elapsed();
@@ -847,6 +853,7 @@ async fn unknown_login_performs_the_same_password_verification_work() {
 
 #[tokio::test]
 async fn mutation_dispatch_preserves_put_and_delete_semantics() {
+    let password = format!("owner-test-{}", uuid::Uuid::new_v4().simple());
     let directory = test_directory();
     let storage = Storage::connect(StorageProfile::Sqlite {
         path: PathBuf::from(directory.path()).join("methods.db"),
@@ -857,7 +864,7 @@ async fn mutation_dispatch_preserves_put_and_delete_semantics() {
         .create_initial_system_admin(
             "owner",
             "System Owner",
-            Password::new("long enough owner password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -885,7 +892,7 @@ async fn mutation_dispatch_preserves_put_and_delete_semantics() {
         .unwrap();
     let application = StorageWebApplication::new(storage.clone());
     let principal = application
-        .login("owner", "long enough owner password")
+        .login("owner", &password)
         .await
         .unwrap()
         .principal;
@@ -1051,6 +1058,7 @@ async fn semantic_rule_listing_preserves_the_current_change_processing_spec() {
 #[tokio::test]
 #[ignore = "requires IOTKIT_TEST_POSTGRES_DSN"]
 async fn postgres_enforces_the_same_web_revision_precondition() {
+    let password = format!("postgres-test-{}", uuid::Uuid::new_v4().simple());
     let dsn = std::env::var("IOTKIT_TEST_POSTGRES_DSN").expect("PostgreSQL DSN");
     let storage = Storage::connect(StorageProfile::Postgres { dsn })
         .await
@@ -1063,7 +1071,7 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
         .create_initial_system_admin(
             "postgres-test",
             "PostgreSQL Test",
-            Password::new("long enough postgres password").unwrap(),
+            Password::new(&password).unwrap(),
             1_700_000_000_000,
         )
         .await
@@ -1100,10 +1108,7 @@ async fn postgres_enforces_the_same_web_revision_precondition() {
         "new PostgreSQL semantic rule must be visible before revision"
     );
     let application = StorageWebApplication::new(storage);
-    let login = application
-        .login("postgres-test", "long enough postgres password")
-        .await
-        .unwrap();
+    let login = application.login("postgres-test", &password).await.unwrap();
     let revised = application
         .mutate(
             &login.principal,

@@ -21,8 +21,6 @@ const PASSPHRASE: &str = "public-format-passphrase";
 const DATABASE: &[u8] = b"SQLite format 3\0public-db";
 const DATABASE_LENGTH: u64 = 25;
 const DATABASE_SHA256: &str = "958ec6fc5da916b2f0008194cf46f2e9342ceae562e04e4b035baf5b7339b79c";
-const FIXED_SALT: [u8; 16] = *b"public-salt-v1!!";
-const FIXED_NONCE_PREFIX: [u8; 16] = *b"public-nonce-v1!";
 
 #[cfg(target_os = "linux")]
 fn encrypt_container_with_entropy(
@@ -116,6 +114,10 @@ fn directory_entries(path: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+fn entropy() -> ([u8; 16], [u8; 16]) {
+    (random_bytes::<16>().unwrap(), random_bytes::<16>().unwrap())
+}
+
 fn publish_new_file(staged: &Path, destination: &Path) -> Result<(), RecoveryError> {
     fs::hard_link(staged, destination).map_err(|error| {
         if error.kind() == io::ErrorKind::AlreadyExists {
@@ -196,13 +198,14 @@ fn deterministic_artifact(root: &Path) -> (std::path::PathBuf, NodeBackupManifes
     write_database(&snapshot);
     let output = root.join("public-vector.iotkit-node-backup");
     let expected = manifest();
+    let (salt, nonce_prefix) = entropy();
     encrypt_container_with_entropy(
         &snapshot,
         &expected,
         &passphrase(),
         &output,
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap();
     (output, expected)
@@ -254,6 +257,8 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
     let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let header_bytes = fs::read(fixture_root.join("node-backup-header-v1.json")).unwrap();
     let header: ContainerHeader = serde_json::from_slice(&header_bytes).unwrap();
+    let salt = decode_16(&header.salt_b64).unwrap();
+    let nonce_prefix = decode_16(&header.nonce_prefix_b64).unwrap();
     assert_eq!(header.artifact_kind, "iotkit_edge_node_database");
     assert_eq!(header.format_version, 1);
     assert_eq!(
@@ -294,8 +299,8 @@ fn public_golden_fixture_matches_json_and_reencodes_byte_for_byte() {
             &expected,
             &passphrase(),
             &reencoded,
-            FIXED_SALT,
-            FIXED_NONCE_PREFIX,
+            salt,
+            nonce_prefix,
         )
         .unwrap();
         assert_eq!(fs::read(reencoded).unwrap(), fs::read(artifact).unwrap());
@@ -466,14 +471,15 @@ fn encryption_uses_the_open_snapshot_handle_after_path_replacement() {
     fs::write(&snapshot, b"replacement-with-different-bytes").unwrap();
     let output = root.path().join("container.iotkit-node-backup");
     let output_directory = directory_capability(root.path());
+    let (salt, nonce_prefix) = entropy();
     encrypt_open_snapshot(
         opened,
         &manifest(),
         &passphrase(),
         &output_directory,
         "container.iotkit-node-backup",
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap();
     let staging = staging_directory(root.path());
@@ -524,14 +530,15 @@ fn in_place_snapshot_truncation_during_encryption_fails_without_artifact() {
         truncated: false,
     };
     let output_directory = directory_capability(root.path());
+    let (salt, nonce_prefix) = entropy();
     let error = encrypt_snapshot_reader(
         reader,
         &manifest(),
         &passphrase(),
         &output_directory,
         "truncated.iotkit-node-backup",
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap_err();
     assert_eq!(error.reason_code(), "manifest_invalid");
@@ -821,14 +828,15 @@ fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
     let output = root.path().join("retry.iotkit-node-backup");
     let output_directory = directory_capability(root.path());
     let before = directory_entries(root.path());
+    let (salt, nonce_prefix) = entropy();
 
     let error = encrypt_snapshot_reader_with_output_init(
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
         (&output_directory, "retry.iotkit-node-backup"),
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
         |_temporary| Err(RecoveryError::ArtifactCleanupFailed),
     )
     .unwrap_err();
@@ -841,8 +849,8 @@ fn encrypted_output_initialization_failure_removes_temp_and_retry_succeeds() {
         &manifest(),
         &passphrase(),
         &output,
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap();
     assert!(output.exists());
@@ -983,14 +991,15 @@ fn encrypted_publication_uses_held_parent_after_path_substitution() {
     let moved = root.path().join("moved-destination");
     let replacement = root.path().join("replacement-destination");
     let output_directory = directory_capability(&parent);
+    let (salt, nonce_prefix) = entropy();
 
     encrypt_snapshot_reader_with_output_init(
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
         (&output_directory, "artifact.iotkit-node-backup"),
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
         |_| {
             fs::rename(&parent, &moved).unwrap();
             fs::create_dir(&replacement).unwrap();
@@ -1010,13 +1019,14 @@ fn encrypted_publication_eexist_preserves_existing_and_retry_succeeds() {
     write_database(&snapshot);
     let output = root.path().join("artifact.iotkit-node-backup");
     fs::write(&output, b"keep").unwrap();
+    let (salt, nonce_prefix) = entropy();
     let error = encrypt_container_with_entropy(
         &snapshot,
         &manifest(),
         &passphrase(),
         &output,
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap_err();
     assert_eq!(error.reason_code(), "destination_exists");
@@ -1027,8 +1037,8 @@ fn encrypted_publication_eexist_preserves_existing_and_retry_succeeds() {
         &manifest(),
         &passphrase(),
         &output,
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap();
 }
@@ -1041,14 +1051,15 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
     write_database(&snapshot);
     let output = root.path().join("artifact.iotkit-node-backup");
     let output_directory = directory_capability(root.path());
+    let (salt, nonce_prefix) = entropy();
 
     let error = encrypt_snapshot_reader_with_output_init(
         File::open(&snapshot).unwrap(),
         &manifest(),
         &passphrase(),
         (&output_directory, "artifact.iotkit-node-backup"),
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
         |owner| {
             owner.ops = output_ops_with_fault(OutputFault::FileSync);
             Ok(())
@@ -1063,8 +1074,8 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         &manifest(),
         &passphrase(),
         (&output_directory, "artifact.iotkit-node-backup"),
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
         |owner| {
             owner.ops = output_ops_with_fault(OutputFault::Write);
             Ok(())
@@ -1079,8 +1090,8 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         &manifest(),
         &passphrase(),
         (&output_directory, "artifact.iotkit-node-backup"),
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
         |owner| {
             owner.ops = output_ops_with_fault(OutputFault::Link);
             Ok(())
@@ -1095,8 +1106,8 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         &manifest(),
         &passphrase(),
         (&output_directory, "artifact.iotkit-node-backup"),
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
         |owner| {
             owner.ops = output_ops_with_fault(OutputFault::DirectorySync);
             Ok(())
@@ -1112,8 +1123,8 @@ fn encrypted_publication_injected_write_link_and_sync_fail_closed() {
         &manifest(),
         &passphrase(),
         &output,
-        FIXED_SALT,
-        FIXED_NONCE_PREFIX,
+        salt,
+        nonce_prefix,
     )
     .unwrap();
 }
@@ -1127,14 +1138,15 @@ fn manifest_database_length_and_digest_mismatch_is_rejected() {
     let snapshot = root.path().join("snapshot.sqlite");
     write_database(&snapshot);
     let output = root.path().join("mismatch-length");
+    let (salt, nonce_prefix) = entropy();
     assert_eq!(
         encrypt_container_with_entropy(
             &snapshot,
             &changed_manifest,
             &passphrase(),
             &output,
-            FIXED_SALT,
-            FIXED_NONCE_PREFIX,
+            salt,
+            nonce_prefix,
         )
         .unwrap_err()
         .reason_code(),
@@ -1151,8 +1163,8 @@ fn manifest_database_length_and_digest_mismatch_is_rejected() {
             &changed_manifest,
             &passphrase(),
             &output,
-            FIXED_SALT,
-            FIXED_NONCE_PREFIX,
+            salt,
+            nonce_prefix,
         )
         .unwrap_err()
         .reason_code(),

@@ -1,6 +1,7 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
+    mem::MaybeUninit,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
@@ -45,10 +46,8 @@ pub(super) fn encrypt(
     passphrase: &str,
 ) -> Result<(), BackupError> {
     ensure_absent(destination)?;
-    let mut salt = [0_u8; 16];
-    let mut nonce_prefix = [0_u8; 16];
-    getrandom::fill(&mut salt).map_err(|_| BackupError::Cryptography)?;
-    getrandom::fill(&mut nonce_prefix).map_err(|_| BackupError::Cryptography)?;
+    let salt = random_bytes::<16>()?;
+    let nonce_prefix = random_bytes::<16>()?;
     let header = Header {
         format_version: FORMAT_VERSION,
         kdf: "argon2id".into(),
@@ -116,6 +115,12 @@ pub(super) fn encrypt(
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+fn random_bytes<const N: usize>() -> Result<[u8; N], BackupError> {
+    let mut bytes = [MaybeUninit::uninit(); N];
+    let initialized = getrandom::fill_uninit(&mut bytes).map_err(|_| BackupError::Cryptography)?;
+    <[u8; N]>::try_from(initialized).map_err(|_| BackupError::Cryptography)
 }
 
 pub(super) fn decrypt(
