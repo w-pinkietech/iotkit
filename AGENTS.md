@@ -26,6 +26,28 @@ the ladder shortens the solution, never the investigation.
 Do not simplify away trust or security boundaries, data-loss prevention,
 accessibility basics, explicit requirements, or focused checks.
 
+## Natural-language output
+
+Use this procedure for Codex-generated natural-language output, including issue
+and PR content:
+
+1. Match the requested language: Japanese requests get Japanese natural
+   language; English requests get English natural language. If both languages
+   are explicitly requested, use separate `日本語` and `English` sections.
+2. Keep original spelling only for product names, API/CLI names, identifiers,
+   state values, protocol names, code, and standard technical proper nouns.
+   Write all other natural language in the requested language.
+3. When using a bilingual template or form, preserve its required headings,
+   fields, labels, options, and controls. Apply the requested language only to
+   generated natural-language headings and body unless bilingual output is
+   explicitly requested; do not imitate a bilingual input or template as the
+   output format. Bilingual issue/PR content uses separate language sections.
+4. Example (Japanese request): `IoTKitのsummaryとMQTTのconnection stateを確認し、CLI commandを説明してください。`
+   Translate `summary`, `connection state`, and `command` in the output;
+   preserve `IoTKit`, `MQTT`, `CLI`, and any exact CLI command or state value
+   supplied by the user.
+5. Reuse this procedure for follow-up work, including issue #228.
+
 ## Always
 
 1. **Issue-driven development** — every development task maps to one GitHub

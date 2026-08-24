@@ -1,3 +1,8 @@
+<!-- Language guidance / 言語の案内:
+Keep this template's required headings and controls unchanged. Write generated natural-language headings/body in the requested language. If bilingual output is explicitly requested, use separate `English` and `日本語` sections; this bilingual template does not itself request bilingual output. Keep product names, API/CLI names, identifiers, state values, protocol names, code, and standard technical proper nouns in original spelling.
+このテンプレートの必須見出しと操作項目は変更せず、生成する自然言語の見出し・本文だけを依頼された言語で書いてください。両言語が明示的に求められた場合は `English` と `日本語` のセクションを分けてください。この二言語テンプレート自体は、二言語出力を求めるものではありません。製品名、API/CLI名、識別子、状態値、プロトコル名、コード、標準的な技術上の固有名詞は原綴りを保ってください。
+-->
+
 ## Summary / 概要
 
 <!-- What changed and why? / 何をなぜ変更しましたか。 -->

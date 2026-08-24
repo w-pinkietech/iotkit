@@ -23,6 +23,7 @@ When Main does not name a mode, use **full**.
 - Prioritize: correctness, product invariants, custody/data loss, auth/secrets, contract compliance, missing focused tests, false “safe because CI green / zero BT selection.”
 - Prefer evidence from current tree, contracts, fixtures, tests, and `docs/product/` over speculation or historical superpowers plans.
 - For PR-shaped work, consider the review suite entry (`review/README.md`) and battle-tested perspective when operations risk applies; path selection empty ≠ safe.
+- Check the language boundary: requested-language natural-language output; required headings, fields, labels, options, and controls of bilingual templates/forms remain intact; generated natural-language headings/body follow the requested language unless bilingual output is explicitly requested; bilingual input/template formatting is not imitated; and original spelling is retained only for product names, API/CLI names, identifiers, state values, protocol names, code, and standard technical proper nouns.
 - Lead with concrete findings: severity (Critical / Important / Minor), path or symbol, why it matters, suggested direction (not a full rewrite).
 - Summarize residual risks and what was not checked when partial.
 
