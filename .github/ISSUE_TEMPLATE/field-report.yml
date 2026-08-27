@@ -12,6 +12,10 @@ body:
 
         IoTKitを実際の現場で使えるものにするための報告に感謝します。
 
+        Language guidance / 言語の案内: Keep this form's required headings and controls unchanged. Write natural-language answers and generated headings/body in the requested language. If bilingual output is explicitly needed, use separate `English` and `日本語` sections; this bilingual form does not itself request bilingual answers. Keep product names, API/CLI names, identifiers, state values, protocol names, code, and standard technical proper nouns in original spelling.
+
+        このフォームの必須見出しと操作項目は変更せず、自然言語の回答と生成する見出し・本文を依頼された言語で書いてください。両言語が明示的に必要な場合は `English` と `日本語` のセクションを分けてください。この二言語フォーム自体は、二言語での回答を求めるものではありません。製品名、API/CLI名、識別子、状態値、プロトコル名、コード、標準的な技術上の固有名詞は原綴りを保ってください。
+
         Do not attach raw logs, configuration, databases, credentials, keys, tokens, customer or factory names, IP addresses, hostnames, SSIDs, MAC addresses, serial numbers, MQTT topics or payloads, or screenshots containing them. Replace identifiers with stable placeholders such as `EDGE_A`.
 
         生ログ、設定、DB、credential、鍵、token、顧客名、工場名、IP address、hostname、SSID、MAC address、serial番号、MQTT topic/payload、それらを含むscreenshotを添付しないでください。識別子は`EDGE_A`のような一貫した仮名へ置き換えてください。
