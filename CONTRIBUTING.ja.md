@@ -47,9 +47,10 @@ changing code**表を使い、変更に該当する行だけを読んでくだ�
 
 ## 開発環境
 
-対応する開発環境はLinuxです。repository rootで`mise install`を実行すると、
-`mise.toml`に固定した言語・CLI toolを導入できます。CIも同じ`mise.toml`を
-`jdx/mise-action`経由で使用します。
+対応する開発環境はLinuxです。[mise公式の導入・activationガイド](https://mise.jdx.dev/getting-started.html)
+に従ってmiseを導入し、shell activationまたはshimsを設定してください。その後、
+repository rootで`mise install`を実行します。直接`node`、`cargo`、`npm`を実行する場合は、
+このshell設定を完了しておいてください。CIも同じ`mise.toml`を`jdx/mise-action`経由で使用します。
 
 - rustfmtとclippyを含むRust 1.95.0
 - Console assetとtest用のNode.js 22、npm
@@ -64,8 +65,9 @@ changing code**表を使い、変更に該当する行だけを読んでくだ�
 
 ```bash
 mise install
-mise exec -- node --version
-mise exec -- cargo --version
+node --version
+cargo --version
+npm --version
 ```
 
 DebianまたはUbuntuでは、言語以外のpackageを次で導入できます。

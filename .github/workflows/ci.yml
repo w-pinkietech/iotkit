@@ -40,6 +40,7 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           version: 2026.8.4
+          install_args: node
 
       - name: Classify changed paths
         id: select
@@ -247,6 +248,12 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           version: 2026.8.4
+
+      - name: Cache Console npm
+        uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('edge/frontend/package-lock.json') }}
 
       - name: Install Console tooling
         run: npm ci --prefix edge/frontend

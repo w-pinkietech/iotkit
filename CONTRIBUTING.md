@@ -50,9 +50,11 @@ to that change. Work is issue-driven; see [`.agents/workflow.md`](.agents/workfl
 
 ## Development environment
 
-The supported contributor environment is Linux. Run `mise install` from the
-repository root to install the language and CLI tools pinned in `mise.toml`.
-CI uses the same `mise.toml` through `jdx/mise-action`.
+The supported contributor environment is Linux. Follow the [official mise
+installation and activation guide](https://mise.jdx.dev/getting-started.html) to
+install mise and configure shell activation or shims. Then run `mise install`
+from the repository root; direct `node`, `cargo`, and `npm` commands require
+that shell setup. CI uses the same `mise.toml` through `jdx/mise-action`.
 
 - Rust 1.95.0 with `rustfmt` and `clippy`;
 - Node.js 22 and npm for Console assets and tests;
@@ -68,8 +70,9 @@ needed for the normal development loop.
 
 ```bash
 mise install
-mise exec -- node --version
-mise exec -- cargo --version
+node --version
+cargo --version
+npm --version
 ```
 
 On Debian or Ubuntu, the non-language packages can be installed with:
