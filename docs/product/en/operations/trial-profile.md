@@ -5,7 +5,7 @@ description: "Starts, reviews, stops, and resets the loopback-only IoTKit trial 
 language: en
 translation_key: operations.trial-profile
 status: draft
-revision: 4
+revision: 5
 ---
 
 # Try IoTKit on this PC
@@ -21,7 +21,7 @@ sensors, PostgreSQL, high availability, or a field-ready update process.
 
 ## Requirements
 
-- A supported Linux host with Git and Python 3.11 or later.
+- A supported Linux host with Git and Python 3.14 or later.
 - Docker Engine with the `docker compose` command.
 - Free local TCP ports 8080 and 18883.
 

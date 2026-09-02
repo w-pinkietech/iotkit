@@ -17,7 +17,7 @@
 
 ## このPCでまず試す
 
-Git、Python 3.11以降、Docker Composeを使用できるLinux hostで、repositoryにある
+Git、Python 3.14以降、Docker Composeを使用できるLinux hostで、repositoryにある
 2行の[`iotkit.toml`](iotkit.toml)からloopback限定の試用環境を起動できます。
 
 ```bash
@@ -162,7 +162,7 @@ Edge NodeとIoTKit Edgeを結ぶ内部Brokerと、外部application Brokerは別
 
 ## Buildとテスト
 
-[`rust-toolchain.toml`](rust-toolchain.toml)で固定したtoolchain（Rust 1.95.0）が必要です。`rustup`が自動的に導入します。
+[`rust-toolchain.toml`](rust-toolchain.toml)で固定したtoolchain（Rust 1.98.0）が必要です。`rustup`が自動的に導入します。
 
 ```bash
 # 対象crateのRust feedback

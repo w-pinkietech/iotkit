@@ -21,7 +21,7 @@ Current product knowledge is also available as an OKF v0.2 bundle in
 
 ## Try IoTKit on this PC
 
-On a Linux host with Git, Python 3.11+, and Docker Compose, the repository's
+On a Linux host with Git, Python 3.14+, and Docker Compose, the repository's
 two-line [`iotkit.toml`](iotkit.toml) starts a loopback-only trial:
 
 ```bash
@@ -222,7 +222,7 @@ the Console intentionally displays status but cannot change broker credentials.
 ## Build & test
 
 Requires the pinned toolchain in [`rust-toolchain.toml`](rust-toolchain.toml)
-(Rust 1.95.0; `rustup` installs it automatically).
+(Rust 1.98.0; `rustup` installs it automatically).
 
 ```bash
 # Focused Rust feedback

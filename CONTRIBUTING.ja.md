@@ -52,9 +52,9 @@ changing code**表を使い、変更に該当する行だけを読んでくだ�
 repository rootで`mise install`を実行します。直接`node`、`cargo`、`npm`を実行する場合は、
 このshell設定を完了しておいてください。CIも同じ`mise.toml`を`jdx/mise-action`経由で使用します。
 
-- rustfmtとclippyを含むRust 1.95.0
-- Console assetとtest用のNode.js 22、npm
-- trial script用のPython 3.11
+- rustfmtとclippyを含むRust 1.98.0
+- Console assetとtest用のNode.js 24、npm
+- trial script用のPython 3.14
 - trial validationとintegration test用のjq 1.8.2
 - integration test用のSQLite 3.53.4
 - Rust test用の`cargo-nextest` 0.9.143
