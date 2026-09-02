@@ -364,6 +364,41 @@ test("current guidance keeps workspace diagnosis explicit", () => {
   }
 });
 
+test("CI uses mise for managed tools", () => {
+  const workflow = ci();
+  for (const path of ["CONTRIBUTING.md", "CONTRIBUTING.ja.md"]) {
+    const guidance = read(path);
+    assert.match(
+      guidance,
+      /\(https:\/\/mise\.jdx\.dev\/getting-started\.html\)/,
+      `${path} links the official mise guide`,
+    );
+    assert.match(
+      guidance,
+      /shell activation[\s\S]*shims[\s\S]*mise install[\s\S]*node --version[\s\S]*cargo --version[\s\S]*npm --version/,
+      `${path} configures shell activation before direct tool checks`,
+    );
+  }
+  for (const job of ["changes", "lightweight", "check", "console", "edge", "trial"]) {
+    assert.match(jobSection(workflow, job), /jdx\/mise-action@v4/, `${job} uses mise`);
+  }
+  const changes = jobSection(workflow, "changes");
+  assert.match(changes, /^\s+install_args:\s+node\s*$/m, "changes installs only node");
+
+  const console = jobSection(workflow, "console");
+  assert.match(console, /uses:\s+actions\/cache@v6/, "console uses the native cache action");
+  assert.match(console, /^\s+path:\s+~\/\.npm\s*$/m, "console caches npm");
+  assert.match(
+    console,
+    /^\s+key:\s+[^\n]*\$\{\{\s*runner\.os\s*\}\}[^\n]*hashFiles\(\s*['"]edge\/frontend\/package-lock\.json['"]\s*\)/m,
+    "console cache key includes runner OS and lockfile hash",
+  );
+  assert.doesNotMatch(
+    workflow,
+    /actions\/setup-(?:node|python)|taiki-e\/install-action|cargo install[^\n]*(?:cargo-nextest|nextest)|apt-get install[^\n]*(?:jq|sqlite3?)/,
+  );
+});
+
 test("required CI derives every selected lane from the selector and executes its real guard", () => {
   const workflow = ci();
   const aggregate = jobSection(workflow, "required-ci");

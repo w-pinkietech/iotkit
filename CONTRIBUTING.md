@@ -50,27 +50,41 @@ to that change. Work is issue-driven; see [`.agents/workflow.md`](.agents/workfl
 
 ## Development environment
 
-The supported contributor environment is Linux. CI currently uses:
+The supported contributor environment is Linux. Follow the [official mise
+installation and activation guide](https://mise.jdx.dev/getting-started.html) to
+install mise and configure shell activation or shims. Then run `mise install`
+from the repository root; direct `node`, `cargo`, and `npm` commands require
+that shell setup. CI uses the same `mise.toml` through `jdx/mise-action`.
 
-- Rust 1.95.0, selected automatically by `rust-toolchain.toml`;
+- Rust 1.95.0 with `rustfmt` and `clippy`;
 - Node.js 22 and npm for Console assets and tests;
+- Python 3.11 for trial scripts;
+- `jq` 1.8.2 for trial validation and integration tests;
+- SQLite 3.53.4 for integration tests;
+- `cargo-nextest` 0.9.143 for Rust tests;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
-Docker Compose, OpenSSL, `jq`, and `curl` are also required for the integration
-scripts. No Raspberry Pi or physical sensor is needed for the normal development
-loop.
+Docker Compose, OpenSSL, and `curl` remain host dependencies for the integration
+scripts and are not managed by `mise`. No Raspberry Pi or physical sensor is
+needed for the normal development loop.
+
+```bash
+mise install
+node --version
+cargo --version
+npm --version
+```
 
 On Debian or Ubuntu, the non-language packages can be installed with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install --yes pkg-config libudev-dev docker.io docker-compose-v2 \
-  openssl jq curl
+sudo apt-get install --yes build-essential pkg-config libudev-dev docker.io docker-compose-v2 \
+  openssl curl
 ```
 
-Install Rust through [rustup](https://rustup.rs/) and Node.js 22 through your
-normal package manager. Do not commit credentials, generated certificates,
-local databases, or deployment output directories.
+Do not commit credentials, generated certificates, local databases, or deployment
+output directories.
 
 Repository Cargo defaults keep compiler jobs and Rust test threads at four so
 normal development does not consume every host core. Existing environment
