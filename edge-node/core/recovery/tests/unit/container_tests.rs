@@ -194,11 +194,19 @@ fn stage_bytes(mut stage: DecryptedStage) -> Vec<u8> {
 }
 
 fn deterministic_artifact(root: &Path) -> (std::path::PathBuf, NodeBackupManifest) {
+    let (salt, nonce_prefix) = entropy();
+    deterministic_artifact_with_entropy(root, manifest(), salt, nonce_prefix)
+}
+
+fn deterministic_artifact_with_entropy(
+    root: &Path,
+    expected: NodeBackupManifest,
+    salt: [u8; 16],
+    nonce_prefix: [u8; 16],
+) -> (std::path::PathBuf, NodeBackupManifest) {
     let snapshot = root.join("snapshot.sqlite");
     write_database(&snapshot);
     let output = root.join("public-vector.iotkit-node-backup");
-    let expected = manifest();
-    let (salt, nonce_prefix) = entropy();
     encrypt_container_with_entropy(
         &snapshot,
         &expected,
@@ -1198,12 +1206,18 @@ fn deterministic_entropy_injection_is_test_only_and_output_is_owner_only() {
 #[ignore = "one-time public fixture generation"]
 fn write_public_golden_fixture() {
     let root = tempdir().unwrap();
-    let (artifact, _) = deterministic_artifact(root.path());
-    fs::copy(
-        artifact,
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/node-backup-v1.bin"),
+    let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let header_bytes = fs::read(fixture_root.join("node-backup-header-v1.json")).unwrap();
+    let header: ContainerHeader = serde_json::from_slice(&header_bytes).unwrap();
+    let salt = decode_16(&header.salt_b64).unwrap();
+    let nonce_prefix = decode_16(&header.nonce_prefix_b64).unwrap();
+    let expected = serde_json::from_slice(
+        &fs::read(fixture_root.join("node-backup-manifest-v1.json")).unwrap(),
     )
     .unwrap();
+    let (artifact, _) =
+        deterministic_artifact_with_entropy(root.path(), expected, salt, nonce_prefix);
+    fs::copy(artifact, fixture_root.join("node-backup-v1.bin")).unwrap();
 }
 
 fn rewrite_header(
