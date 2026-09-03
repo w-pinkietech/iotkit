@@ -88,7 +88,7 @@ pub(crate) enum PublicationFailureKind {
 pub(crate) struct PublicationFailure {
     pub kind: PublicationFailureKind,
     pub delivery: Option<OutputDelivery>,
-    error: StorageError,
+    error: Box<StorageError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,7 +231,7 @@ impl OutputProfiles {
     ) -> Result<OutputPublicationPreview, StorageError> {
         self.publication_with_failure(binding_id, now)
             .await
-            .map_err(|failure| failure.error)
+            .map_err(|failure| *failure.error)
     }
 
     pub(crate) async fn publication_with_failure(
@@ -246,7 +246,7 @@ impl OutputProfiles {
             .map_err(|error| PublicationFailure {
                 kind: PublicationFailureKind::DeliveryUnavailable,
                 delivery: None,
-                error,
+                error: Box::new(error),
             })?;
         let delivery = OutputDelivery {
             state: delivery_state(
@@ -390,7 +390,7 @@ fn preview_failure(error: StorageError, delivery: &OutputDelivery) -> Publicatio
     PublicationFailure {
         kind: PublicationFailureKind::Preview,
         delivery: Some(delivery.clone()),
-        error,
+        error: Box::new(error),
     }
 }
 
