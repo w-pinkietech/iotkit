@@ -5,6 +5,7 @@ use iotkit_edge::{
 use iotkit_edge_custody_contract::{
     ActivationRequest, ActivationResult, DescriptorSnapshot, RecordBatch,
 };
+use serde_json::Value;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -30,6 +31,21 @@ fn fixture(path: &str) -> Vec<u8> {
             .join(path),
     )
     .expect("read fixture")
+}
+
+fn invalid_descriptor_case(name: &str) -> Vec<u8> {
+    let corpus: Value = serde_json::from_slice(&fixture(
+        "testdata/egress/v2/descriptor-conformance-cases.json",
+    ))
+    .expect("decode shared descriptor conformance corpus");
+    let case = corpus["cases"]
+        .as_array()
+        .expect("descriptor conformance cases")
+        .iter()
+        .find(|case| case["name"] == name)
+        .expect("named descriptor conformance case");
+    assert_eq!(case["valid"], false, "case must be invalid");
+    serde_json::to_vec(&case["descriptor"]).expect("encode descriptor conformance case")
 }
 
 fn storage_batch(batch: &RecordBatch) -> AcceptBatch {
@@ -220,5 +236,157 @@ async fn unconfigured_inactive_node_stores_no_raw_records_and_emits_no_acknowled
             .await
             .expect("read custody cursor"),
         0
+    );
+}
+
+#[tokio::test]
+async fn invalid_descriptor_leaves_descriptor_inventory_and_activation_unchanged() {
+    let (_directory, store) = store().await;
+    let processor = IngestProcessor::new(store.clone());
+    let topic = "iotkit/v1/edge-nodes/edge-node-01/descriptors";
+    processor
+        .handle(
+            topic,
+            &fixture("testdata/egress/v2/descriptor-snapshot.json"),
+            1_720_000_000_000,
+        )
+        .await
+        .expect("apply valid descriptor");
+
+    let command = store
+        .request_activation("edge-node-01", 1_720_000_000_100)
+        .await
+        .expect("request activation");
+    let request =
+        ActivationRequest::decode(&command.payload_json).expect("decode activation request");
+    processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/activation/result",
+            &serde_json::to_vec(&ActivationResult {
+                schema_version: 1,
+                activation_id: request.activation_id,
+                edge_id: request.edge_id,
+                edge_node_id: request.edge_node_id,
+                ledger_epoch: request.expected_ledger_epoch,
+                status: "applied".into(),
+                discard_through_reading_seq: 12,
+                first_publication_seq: 1,
+                applied_at: 1_720_000_000_200,
+            })
+            .expect("encode activation result"),
+            1_720_000_000_200,
+        )
+        .await
+        .expect("activate Edge Node");
+
+    processor
+        .handle(
+            "iotkit/v1/edge-nodes/edge-node-01/records",
+            &fixture("testdata/egress/v1/record-batch.json"),
+            1_720_000_000_250,
+        )
+        .await
+        .expect("accept custody record")
+        .expect("emit custody acknowledgement");
+
+    let node_before = store
+        .edge_node("edge-node-01")
+        .await
+        .expect("read Edge Node");
+    let descriptor_devices_before = store
+        .list_descriptor_devices()
+        .await
+        .expect("read descriptor devices");
+    let descriptor_signals_before = store
+        .list_descriptor_signals()
+        .await
+        .expect("read descriptor signals");
+    let inventory_devices_before = store
+        .inventory_devices()
+        .await
+        .expect("read inventory devices");
+    let inventory_signals_before = store
+        .inventory_signals()
+        .await
+        .expect("read inventory signals");
+    let commands_before = store
+        .pending_activation_commands(10)
+        .await
+        .expect("read activation commands");
+    let raw_records_before = store
+        .raw_records("edge-node-01", "epoch-01")
+        .await
+        .expect("read raw records");
+    let accepted_through_before = store
+        .accepted_through("edge-node-01", "epoch-01")
+        .await
+        .expect("read custody cursor");
+    assert_eq!(accepted_through_before, 1, "establish nonzero custody");
+
+    let error = processor
+        .handle(
+            topic,
+            &invalid_descriptor_case("measurement_key_invalid_segment"),
+            1_720_000_000_300,
+        )
+        .await
+        .expect_err("invalid descriptor must not reach storage");
+    assert!(matches!(error, IngestError::Contract(_)));
+
+    assert_eq!(
+        store
+            .edge_node("edge-node-01")
+            .await
+            .expect("read Edge Node"),
+        node_before
+    );
+    assert_eq!(
+        store
+            .list_descriptor_devices()
+            .await
+            .expect("read descriptor devices"),
+        descriptor_devices_before
+    );
+    assert_eq!(
+        store
+            .list_descriptor_signals()
+            .await
+            .expect("read descriptor signals"),
+        descriptor_signals_before
+    );
+    assert_eq!(
+        store
+            .inventory_devices()
+            .await
+            .expect("read inventory devices"),
+        inventory_devices_before
+    );
+    assert_eq!(
+        store
+            .inventory_signals()
+            .await
+            .expect("read inventory signals"),
+        inventory_signals_before
+    );
+    assert_eq!(
+        store
+            .pending_activation_commands(10)
+            .await
+            .expect("read activation commands"),
+        commands_before
+    );
+    assert_eq!(
+        store
+            .raw_records("edge-node-01", "epoch-01")
+            .await
+            .expect("read raw records"),
+        raw_records_before
+    );
+    assert_eq!(
+        store
+            .accepted_through("edge-node-01", "epoch-01")
+            .await
+            .expect("read custody cursor"),
+        accepted_through_before
     );
 }

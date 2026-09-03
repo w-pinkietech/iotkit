@@ -54,4 +54,5 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 serial_test = "3"
 iotkit-core-storage = { path = "../../core/storage", features = ["test-util"] }
+iotkit-edge-custody-contract = { path = "../../../edge/custody-contract" }
 tower = { version = "0.5", features = ["util"] }

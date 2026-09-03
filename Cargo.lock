@@ -1622,6 +1622,7 @@ dependencies = [
  "iotkit-core-supervision",
  "iotkit-core-timeseries",
  "iotkit-core-types",
+ "iotkit-edge-custody-contract",
  "iotkit-ingest-client",
  "iotkit-ingest-http",
  "iotkit-input-adapter-host-api",
