@@ -2380,3 +2380,77 @@ fn a_pipeline_that_discards_an_input_is_recorded_without_failing_the_envelope() 
     })
     .unwrap();
 }
+
+// ── device faults and commit notification (#232 child issue 4) ──────────
+
+#[tokio::test]
+async fn storage_failure_starts_the_storage_write_fault_and_the_next_commit_clears_it() {
+    let db = test_db();
+    register_active(&db, "ble:aa");
+    db.with_conn_sync(|conn| {
+        conn.execute_batch(
+            "CREATE TRIGGER fail_reading BEFORE INSERT ON readings
+                 WHEN new.values_json='[2.0]'
+                 BEGIN SELECT RAISE(FAIL, 'injected storage failure'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let device_faults = iotkit_core_pipeline::DeviceFaults::default();
+    let engine = iotkit_core_pipeline::PipelineEngine::new("rpi1".parse().unwrap());
+    let pipelines = Arc::new(
+        PipelineDelivery::new(engine, iotkit_core_pipeline::PipelineFaults::default())
+            .with_device_faults(device_faults.clone()),
+    );
+    let (collector, _h) = Collector::spawn_with_components(
+        db.clone(),
+        Arc::new(PermissiveRegistry),
+        16,
+        DEFAULT_PURGE_INTERVAL_MS,
+        Arc::new(UntrustedSystemClock),
+        FreshnessLimits::default(),
+        None,
+        Some(pipelines.clone()),
+    );
+
+    assert!(matches!(
+        collector
+            .submit(env_with_value("e-fail-1", "ble:aa", "temperature_c", 2.0))
+            .await,
+        Err(SubmitError::NoAck)
+    ));
+    assert!(matches!(
+        collector
+            .submit(env_with_value("e-fail-2", "ble:aa", "temperature_c", 2.0))
+            .await,
+        Err(SubmitError::NoAck)
+    ));
+    let snapshot = device_faults.snapshot();
+    assert!(snapshot.degraded());
+    let storage = snapshot.storage.expect("storage fault started");
+    assert_eq!(storage.count, 2, "each discarded envelope is counted");
+    assert!(storage.last_error.contains("injected storage failure"));
+
+    // Validation runs the same checks but writes nothing, so it neither
+    // clears the fault nor signals a commit.
+    collector
+        .validate(env_with_value("e-validate", "ble:aa", "temperature_c", 1.0))
+        .await
+        .unwrap();
+    assert!(device_faults.snapshot().degraded());
+
+    collector
+        .submit(env_with_value("e-ok", "ble:aa", "temperature_c", 1.0))
+        .await
+        .expect("a value the trigger lets through commits");
+    assert!(
+        !device_faults.snapshot().degraded(),
+        "one successful commit recovers the fault"
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        pipelines.committed().notified(),
+    )
+    .await
+    .expect("the commit is signalled to the outbox reader");
+}

@@ -34,11 +34,36 @@ by hand.
 Do not write unit tests for TOML parsing, typed operations, Console rendering,
 or MQTT client details. L1 and L2 cover them.
 
-## While the journey cannot run yet
+## The journey script
 
-The journey needs the MQTT Output Adapter from #232 child issue 4. Until then
-`master` must compile, pass the unit tests that stay, and pass the
-documentation checks. The gates change per child issue:
+`scripts/test-journey.sh` runs L1 and L2 (#232 child issue 4). It builds
+`iotkit-edge-node` and `iotkit-edge-nodectl`, starts a throwaway Mosquitto,
+starts the node with the `trial-sample` Input Adapter and three pipelines
+(`measurement`, `state`, `accumulated-count` on the same contact input), and
+checks at `mosquitto_sub` with `scripts/journey/check_messages.py`:
+
+- L1: heartbeat `online` with `faults: []`; every payload has the contract's
+  key order and types; one series with sequences 1..n per pipeline;
+  `measurement` follows the triangle wave (120..200, step 8) on every input;
+  `accumulated-count` starts at `sequence = 1, value = 0` and equals the rising
+  edges of the `state` pipeline.
+- L2: Broker stop and start (outbox fills, converges to empty, status is the
+  first publish after reconnecting, a late subscriber's retained values are
+  continued without gaps); `kill -9` (Will with null times) and restart (same
+  series, at most one duplicate); `nodectl pipeline update` keeps the series;
+  `nodectl pipeline reset` starts one; `nodectl pipeline delete` clears the
+  retained value; a SQLite trigger makes writes fail (`degraded` with
+  `storage-write-failed`, back to `online` on the next commit); SIGTERM
+  publishes the graceful `offline` and exits 0.
+
+Until the Console exists (child issue 6), `nodectl` stands in for the operator.
+The Broker log (`log_type all`) is the record of publish order; the subscriber
+captures are the record of payloads. Waits are bounded condition waits.
+
+## Gates per child issue
+
+`master` must compile, pass the unit tests that stay, pass the documentation
+checks, and pass the journey. The gates changed per child issue:
 
 | Stage | Required |
 |---|---|
@@ -49,10 +74,9 @@ documentation checks. The gates change per child issue:
 | #232 children 5 and 6 | same; `cargo test` shrinks as old crates are deleted |
 
 CI has no changed-path selection. Every PR runs the lightweight lane, the full
-Rust lane, and the journey lane. Today the journey lane is the receiving half
-(`scripts/test-observation-consumer.sh`): the contract fixtures are published to
-a real Mosquitto and checked at the subscriber. Child issue 4 replaces the
-publisher with the IoTKit process.
+Rust lane, and the journey lane. The journey lane first runs the consumer-side
+fixture check (`scripts/test-observation-consumer.sh`), then
+`scripts/test-journey.sh`.
 
 ## Old integration scripts
 

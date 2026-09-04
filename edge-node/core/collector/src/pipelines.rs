@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 
 use iotkit_core_pipeline::{
-    AcceptedReading, EngineError, InputTime, PipelineEngine, PipelineFaults,
+    AcceptedReading, DeviceFaults, EngineError, InputTime, PipelineEngine, PipelineFaults,
 };
 use iotkit_ingest_contract::ReadingItem;
+use tokio::sync::Notify;
 
 use crate::principal::IngestPrincipal;
 
@@ -18,6 +19,8 @@ pub struct PipelineDelivery {
     /// by `PipelineInput::adapter`.
     adapters: HashMap<String, String>,
     faults: PipelineFaults,
+    device_faults: DeviceFaults,
+    committed: Notify,
 }
 
 impl PipelineDelivery {
@@ -26,7 +29,36 @@ impl PipelineDelivery {
             engine,
             adapters: HashMap::new(),
             faults,
+            device_faults: DeviceFaults::default(),
+            committed: Notify::new(),
         }
+    }
+
+    /// Shares the device fault record with the rest of the process; the
+    /// collector reports storage failures and successes into it.
+    pub fn with_device_faults(mut self, device_faults: DeviceFaults) -> Self {
+        self.device_faults = device_faults;
+        self
+    }
+
+    pub fn device_faults(&self) -> &DeviceFaults {
+        &self.device_faults
+    }
+
+    /// Signalled after every committed accept transaction, so the MQTT Output
+    /// Adapter can read the outbox without polling.
+    pub fn committed(&self) -> &Notify {
+        &self.committed
+    }
+
+    pub(crate) fn note_commit(&self) {
+        self.device_faults.storage_write_succeeded();
+        self.committed.notify_one();
+    }
+
+    pub(crate) fn note_storage_failure(&self, error: &str) {
+        self.device_faults
+            .storage_write_failed(error, iotkit_core_pipeline::uptime_ms());
     }
 
     /// Registers an Input Adapter instance. Readings from principals that are

@@ -13,5 +13,7 @@ pub use gpio::{GpioInput, GpioOutput, GpioPull};
 pub use i2c::{I2cConfig, I2cTransport};
 pub use pwm::{PwmChannel, PwmConfig, PwmOutput, PwmPolarity};
 pub use serial::{DataBits, Parity, SerialConfig, SerialTransport, StopBits};
+/// Re-exported so adapters can name `serialport::Error` without their own dependency.
+pub use serialport;
 pub use spi::{SpiBus, SpiConfig, SpiMode, SpiSlaveSelect, SpiTransport};
 pub use usb::{UsbSerialInfo, UsbSerialTransport, list_usb_serial_devices};

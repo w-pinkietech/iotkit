@@ -5,7 +5,7 @@ description: "Defines the complete Input Adapter identity, authority, host API, 
 language: en
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit northbound Input Adapter host contract v1
@@ -155,8 +155,16 @@ advance or clear an upstream cursor. Local abandonment never manufactures
 custody or advances that cursor.
 
 Activity is a coalescing latest-value snapshot with process-monotonic
-timestamps for successful physical decode and client-queue admission, plus a
-dropped-diagnostics counter. Diagnostics are bounded, best-effort, redacted,
+timestamps for successful physical decode and client-queue admission, a
+dropped-diagnostics counter, and the interface state. The interface state is
+`Unreported`, `Open`, or `OpenFailed` (a `std::io::ErrorKind` and a short
+description); an adapter that opens its hardware interface itself (serial, I2C,
+GPIO) reports it through `interface_opened` / `interface_open_failed`. The host
+publishes it as the status fault `interface-open-failed`
+([MQTT Output Adapter contract v1](mqtt-output-adapter-v1.md), section 7.1) and
+clears it on `Open`. For an adapter whose `start` returns a `std::io::Error`
+because it cannot open its interface, that error kind becomes the reason of the
+same fault. Diagnostics are bounded, best-effort, redacted,
 and use generic kinds:
 
 ```text

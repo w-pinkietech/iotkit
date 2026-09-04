@@ -536,8 +536,8 @@ fn fenced_candidate_exits_before_logging_or_starting_normal_runtime() {
         "stderr={stderr}"
     );
     assert!(
-        !stderr.contains("MQTT exit publisher started")
-            && !stdout.contains("MQTT exit publisher started")
+        !stderr.contains("MQTT Output Adapter started")
+            && !stdout.contains("MQTT Output Adapter started")
     );
     assert!(
         !stderr.contains("control-plane API started")

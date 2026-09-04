@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 21
+revision: 22
 ---
 
 # Architecture
@@ -67,11 +67,11 @@ Edge Nodeはledgerとregistryから1 MiB以下のschema-2 complete descriptor sn
 
 Broker enrollmentはtransport接続許可だけで、activationではありません。Activation前のObservationはlocalに保存し、publication sequenceを与えず送信しません。IoTKit EdgeがdescriptorからEdge Nodeを発見し、admin typed operationでexact ledger epochのrequestを耐久enqueueします。Edge Nodeが検証・耐久適用して境界を固定し、その後のingestだけをoutboxへ入れます。IoTKit Edgeはmatching resultをcommitしてactiveにした後だけ、activation検査、raw保存、cursor更新を同一transactionで行います。
 
-`mqtt_publish_task`が現行production exit bindingです。Broker PUBACKはtransport receiptであり、custody移転ではありません。IoTKit Edgeがraw recordとcursorをcommitし、対応する`accepted-through`をpublishするまでEdge Node outboxを保持します。
+Edge Nodeの`[output.mqtt]`は、[#232](https://github.com/w-pinkietech/iotkit/issues/232)の再設計により[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)の送信側（`edge-node/apps/node/src/output_mqtt.rs`）を起動します。pipelineが積んだoutboxを挿入順にin-flight 1件で公開し、Broker PUBACKで行を削除し、再接続後はstatusを先に公開してからoutboxを再送します。Edge Nodeは旧契約のrecord batch、descriptor、activation、`accepted-through`をもう送受信しません。中央の`iotkit-edge`とそのcustody経路はこの節の以下の説明のまま残っていますが、新しいEdge Nodeからは何も届かず、子Issue 5で削除します。
 
 ### 運用statusと因果診断
 
-Custodyとは別に、Edge Nodeはboundedなv1 `status` heartbeatを自身のretained QoS 1 MQTT topicへ送ります。MQTT subscriptionの確認直後に一度、その後30秒ごとに送ります。これは運用上のevidenceだけです。Nodeが持つ`accepted_through`とpending publicationのviewはcustody cursorをadvanceせず、purgeを許可せず、Broker PUBACKをdurable acceptanceへ変えません。IoTKit Edgeは現在activeなledger epochの最新statusだけを保存します。Retained replayは過去detailを補えますが、Nodeをliveとは判定しません。
+Edge Nodeのstatusは[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)第7節のとおりです。接続直後と`[status] heartbeat_interval`ごとに`online`または`degraded`と`faults`を送り、保存失敗の開始と回復、Input Adapterのインタフェースopen失敗と回復は間隔を待たずに送ります。異常切断ではBrokerがWillの`offline`を公開し、正常終了ではEdge Node自身が時刻付きの`offline`を公開してから切断します。Broker PUBACKはEdge Nodeの送信責任の境界であり、consumerの保存を意味しません。旧`status` heartbeat（`accepted_through`、pending publication）はもう送りません。
 
 IoTKit Edge自身のBroker/subscription状態はNode heartbeatとは別のprocess-local stateです。既存のserver-rendered `/status`は、Sensor input、Input Adapter、Edge Node collector、internal Broker path、raw custody、semantic projection、external outputの順にevidenceを示します。登録済みや古いraw値をonlineの根拠にせず、最初に対処すべき原因を一つ示します。各stageは、確認できる最終成功時刻（不明なら**まだ確認できません**）、boundedな影響範囲、慎重な原因、次の確認を表示します。current durable/process factから再計算し、後続の一致する成功evidenceでactive stateを自動clearします。手動でincidentをdismissする操作はありません。Heartbeatは90秒でwarning、300秒でcriticalです。古いraw値は上流pathがhealthyな場合だけadvisoryであり、停止とは断定しません。IoTKit Edgeのsupervised fatal taskが終了するとservice全体を停止するため、その場合Consoleは利用できず、hostのservice managerとlogで診断します。
 

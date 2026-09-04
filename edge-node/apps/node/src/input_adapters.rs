@@ -17,10 +17,42 @@ use crate::config::RawInputAdapterInstance;
 
 type ErasedConfig = Arc<dyn Any + Send + Sync>;
 
+/// Why an adapter instance did not start. `io_kind` is kept so the status
+/// topic can report `interface-open-failed` with the contract's `reason`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterStartError {
+    pub io_kind: Option<std::io::ErrorKind>,
+    pub message: String,
+}
+
+impl fmt::Display for AdapterStartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AdapterStartError {}
+
+impl AdapterStartError {
+    fn io(prefix: &str, error: std::io::Error) -> Self {
+        Self {
+            io_kind: Some(error.kind()),
+            message: format!("{prefix}: {error}"),
+        }
+    }
+
+    fn other(prefix: &str, error: impl fmt::Display) -> Self {
+        Self {
+            io_kind: None,
+            message: format!("{prefix}: {error}"),
+        }
+    }
+}
+
 struct InputAdapterFactory {
     descriptor: fn() -> InputAdapterTypeDescriptor,
     parse_and_validate: fn(&RawInputAdapterInstance) -> Result<ErasedConfig, String>,
-    start: fn(AdapterStartContext, &dyn Any) -> Result<RunningInputAdapter, String>,
+    start: fn(AdapterStartContext, &dyn Any) -> Result<RunningInputAdapter, AdapterStartError>,
     positional_inventory: fn(&ConfiguredSource, &dyn Any) -> Vec<PositionalInventoryItem>,
 }
 
@@ -95,7 +127,10 @@ impl PreparedInputAdapter {
         (self.factory.positional_inventory)(&self.source, self.config.as_ref())
     }
 
-    pub fn start(&self, context: AdapterStartContext) -> Result<RunningInputAdapter, String> {
+    pub fn start(
+        &self,
+        context: AdapterStartContext,
+    ) -> Result<RunningInputAdapter, AdapterStartError> {
         (self.factory.start)(context, self.config.as_ref())
     }
 }
@@ -174,12 +209,12 @@ fn parse_bravepi(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String> 
 fn start_bravepi(
     context: AdapterStartContext,
     config: &dyn Any,
-) -> Result<RunningInputAdapter, String> {
+) -> Result<RunningInputAdapter, AdapterStartError> {
     let port = config
         .downcast_ref::<String>()
         .expect("BravePI factory owns validated String config");
     bravepi_mainboard_adapter::task::start_host(context, port.clone())
-        .map_err(|error| format!("failed to start BravePI adapter: {error}"))
+        .map_err(|error| AdapterStartError::io("failed to start BravePI adapter", error))
 }
 
 fn no_positional_inventory(
@@ -227,13 +262,13 @@ fn parse_rpi_local(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, String
 fn start_rpi_local(
     context: AdapterStartContext,
     config: &dyn Any,
-) -> Result<RunningInputAdapter, String> {
+) -> Result<RunningInputAdapter, AdapterStartError> {
     let config = config
         .downcast_ref::<rpi_local_adapter::RpiLocalConfig>()
         .expect("RPi local factory owns validated RpiLocalConfig")
         .clone();
     rpi_local_adapter::start_host(context, config)
-        .map_err(|error| format!("failed to start RPi local adapter: {error}"))
+        .map_err(|error| AdapterStartError::io("failed to start RPi local adapter", error))
 }
 
 fn rpi_local_inventory(
@@ -278,12 +313,12 @@ fn parse_trial_sample(raw: &RawInputAdapterInstance) -> Result<ErasedConfig, Str
 fn start_trial_sample(
     context: AdapterStartContext,
     config: &dyn Any,
-) -> Result<RunningInputAdapter, String> {
+) -> Result<RunningInputAdapter, AdapterStartError> {
     let config = *config
         .downcast_ref::<trial_sample_adapter::TrialSampleConfig>()
         .expect("trial sample factory owns validated TrialSampleConfig");
     trial_sample_adapter::start_host(context, config)
-        .map_err(|error| format!("failed to start trial sample adapter: {error}"))
+        .map_err(|error| AdapterStartError::other("failed to start trial sample adapter", error))
 }
 
 fn trial_sample_inventory(

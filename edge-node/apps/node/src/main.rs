@@ -2,11 +2,12 @@
 //! adapter を起動し、core/engine に event を渡す。
 
 mod adapter_host;
-mod mqtt_publish_task;
+mod output_mqtt;
 #[allow(dead_code)]
 mod publish_task;
 mod retention;
 mod supervision;
+mod trusted_clock;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -24,7 +25,7 @@ use iotkit_edge_node::api::{ApiHandle, spawn_api_task};
 use iotkit_edge_node::{config, epoch_start, health};
 use iotkit_ingest_client::IngestClient;
 use iotkit_input_adapter_host_api::{
-    AdapterCompletion, AdapterStartContext, RunningInputAdapter, SourceBoundIngest,
+    AdapterCompletion, AdapterStartContext, InterfaceState, RunningInputAdapter, SourceBoundIngest,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -277,20 +278,25 @@ async fn run(
         })
         .await
         .expect("ledger epoch");
-    let prepared_mqtt_runtime = if let Some(mqtt_config) = config.mqtt_output.clone() {
-        match mqtt_publish_task::prepare_mqtt_publish_runtime(db.clone(), mqtt_config).await {
-            Ok(runtime) => {
-                tracing::info!("MQTT exit publication target prepared");
-                Some(runtime)
-            }
+    let prepared_output_mqtt = if let Some(mqtt_config) = config.mqtt_output.clone() {
+        match output_mqtt::prepare(
+            mqtt_config,
+            config.edge_node_id.clone(),
+            config.status.heartbeat_interval,
+        ) {
+            Ok(adapter) => Some(adapter),
             Err(error) => {
-                tracing::error!(error = %error, "failed to prepare MQTT exit publication target");
+                tracing::error!(error = %error, "failed to prepare the MQTT Output Adapter");
                 return false;
             }
         }
     } else {
         None
     };
+    // Device faults (contract section 7.1) are shared by the collector
+    // (storage failures), the adapter supervisor below (interface open
+    // failures), and the MQTT Output Adapter that publishes them.
+    let device_faults = iotkit_core_pipeline::DeviceFaults::default();
     let _retention_task = retention::spawn_retention_task(
         db.clone(),
         db_path.clone(),
@@ -405,17 +411,20 @@ async fn run(
     let mut pipeline_delivery = iotkit_core_collector::PipelineDelivery::new(
         pipeline_engine,
         iotkit_core_pipeline::PipelineFaults::default(),
-    );
+    )
+    .with_device_faults(device_faults.clone());
     for instance in &config.adapter_instances {
         pipeline_delivery
             .register_adapter(instance.source().as_str(), instance.instance_id().as_str());
     }
+    let pipeline_delivery = Arc::new(pipeline_delivery);
     let (collector, principal_issuer, device_issuer, _collector_handle) =
-        iotkit_core_collector::Collector::spawn_fully_composed(
+        iotkit_core_collector::Collector::spawn_fully_composed_with_clock(
             db.clone(),
             std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
             256,
-            Some(std::sync::Arc::new(pipeline_delivery)),
+            Arc::new(trusted_clock::ClockTrustFreshness::new(clock_trust.clone())),
+            Some(pipeline_delivery.clone()),
         );
     health_state
         .lock()
@@ -501,6 +510,11 @@ async fn run(
     let mut generation_counters: HashMap<AdapterId, u64> = HashMap::new();
     let (healthy_tx, mut healthy_rx) =
         tokio::sync::mpsc::channel::<ActivityNotice>((config.adapter_instances.len() * 2).max(1));
+    // R20: アプリレベル監督(責務台帳)。プロセスレベルはsystemdに委譲。
+    let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
+    let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
+    let mut pending_restart_count = 0usize;
+    let mut exhausted_adapter_count = 0usize;
     for instance in &config.adapter_instances {
         let source = instance.source().as_str().to_owned();
         let principal =
@@ -517,12 +531,21 @@ async fn run(
             let _ = ingest_handle.await;
             let _ = exit_tx.send(());
         });
+        let id = AdapterId::new(instance.instance_id().as_str());
+        restart_specs.insert(
+            id.clone(),
+            RestartSpec {
+                instance: instance.clone(),
+                ingest: ingest.clone(),
+            },
+        );
         match start_input_adapter(
             &mut host,
             instance.clone(),
-            ingest.clone(),
+            ingest,
             healthy_tx.clone(),
             1,
+            device_faults.clone(),
         ) {
             Ok(id) => {
                 active_generations.insert(id.clone(), 1);
@@ -531,23 +554,35 @@ async fn run(
                     .lock()
                     .expect("health state mutex poisoned")
                     .note_adapter_running(&id.to_string());
-                restart_specs.insert(
-                    id,
-                    RestartSpec {
-                        instance: instance.clone(),
-                        ingest,
-                    },
-                );
             }
-            Err(e) => {
+            Err(error) => {
+                // Contract section 7.1: the device itself is running, so the
+                // failure is reported as interface-open-failed and the start is
+                // retried with the same backoff as a closed adapter.
                 tracing::error!(
-                    error = %e,
+                    error = %error,
                     instance = %instance.instance_id(),
                     adapter_type = instance.adapter_type(),
-                    "failed to start input adapter"
+                    "failed to start input adapter; retrying with backoff"
                 );
-                host.shutdown_all().await;
-                return false;
+                note_interface_open_failed(&device_faults, &id, &error);
+                match tracker.next_delay(&id) {
+                    Some(delay) => {
+                        pending_restart_count = pending_restart_count.saturating_add(1);
+                        health_state
+                            .lock()
+                            .expect("health state mutex poisoned")
+                            .note_adapter_restarting(&id.to_string());
+                        supervision::schedule_restart_notification(id, delay, tx_restart.clone());
+                    }
+                    None => {
+                        exhausted_adapter_count = exhausted_adapter_count.saturating_add(1);
+                        health_state
+                            .lock()
+                            .expect("health state mutex poisoned")
+                            .note_adapter_exhausted(&id.to_string());
+                    }
+                }
             }
         }
     }
@@ -557,25 +592,22 @@ async fn run(
         .await
         .expect("epoch_start annotation")
         .expect("epoch_start annotation");
-    if !may_start_status_publisher(&health_state, config.adapter_instances.len()) {
-        tracing::error!(
-            "collector or configured input adapters were not ready before MQTT startup"
+    let mut output_mqtt = if let Some(adapter) = prepared_output_mqtt {
+        let handle = output_mqtt::spawn(
+            adapter,
+            output_mqtt::OutputSources {
+                db: db.clone(),
+                faults: device_faults.clone(),
+                pipelines: pipeline_delivery.clone(),
+                clock_trust: clock_trust.clone(),
+            },
         );
-        host.shutdown_all().await;
-        return false;
-    }
-    let mut publish_task = if let Some(runtime) = prepared_mqtt_runtime {
-        let task =
-            mqtt_publish_task::spawn_mqtt_publish_task(db.clone(), health_state.clone(), runtime);
-        tracing::info!("MQTT exit publisher started");
-        Some(task)
+        tracing::info!("MQTT Output Adapter started");
+        Some(handle)
     } else {
-        tracing::info!("MQTT exit publisher disabled");
+        tracing::info!("MQTT Output Adapter disabled");
         None
     };
-
-    // R20: アプリレベル監督(責務台帳)。プロセスレベルはsystemdに委譲。
-    let mut tracker = supervision::RestartTracker::new(supervision::RestartPolicy::default());
 
     // コレクタタスク死亡時、fan-inループをbreakした後にfalseを返して非ゼロexitへ導くフラグ
     // (正常終了=要求されたshutdown/全アダプタclose はtrueのまま=exit 0)。プロセスレベルの再起動は
@@ -584,11 +616,11 @@ async fn run(
     let mut api_failed = false;
     let mut mqtt_failed = false;
     let mut api_shutdown_requested = false;
-    let mqtt_task_running = publish_task.is_some();
-    let service_only_mode = host.is_empty() && (api_task_running || mqtt_task_running);
-    let (tx_restart, mut rx_restart) = tokio::sync::mpsc::unbounded_channel::<AdapterId>();
-    let mut pending_restart_count = 0usize;
-    let mut exhausted_adapter_count = 0usize;
+    let mqtt_task_running = output_mqtt.is_some();
+    let service_only_mode = host.is_empty()
+        && pending_restart_count == 0
+        && exhausted_adapter_count == 0
+        && (api_task_running || mqtt_task_running);
     // Unified fan-in loop
     loop {
         if host.is_empty()
@@ -636,12 +668,12 @@ async fn run(
                     }
                 }
             }
-            mqtt_result = wait_for_mqtt_task(&mut publish_task), if mqtt_task_running => {
-                publish_task = None;
+            mqtt_result = wait_for_mqtt_task(&mut output_mqtt), if mqtt_task_running => {
+                output_mqtt = None;
                 mqtt_failed = true;
                 match mqtt_result {
-                    Ok(()) => tracing::error!("MQTT exit publisher exited unexpectedly"),
-                    Err(error) => tracing::error!(error = %error, "MQTT exit publisher panicked"),
+                    Ok(()) => tracing::error!("MQTT Output Adapter exited unexpectedly"),
+                    Err(error) => tracing::error!(error = %error, "MQTT Output Adapter panicked"),
                 }
                 break;
             }
@@ -683,6 +715,7 @@ async fn run(
                     spec.ingest.clone(),
                     healthy_tx.clone(),
                     generation,
+                    device_faults.clone(),
                 );
                 match restart_result {
                     Ok(new_id) => {
@@ -691,6 +724,7 @@ async fn run(
                             .lock()
                             .expect("health state mutex poisoned")
                             .note_adapter_running(&new_id.to_string());
+                        device_faults.interface_opened(new_id.as_str());
                         tracing::info!(adapter = %new_id, "Adapter restarted successfully");
                     }
                     Err(e) => {
@@ -698,6 +732,7 @@ async fn run(
                             adapter = %id, error = %e,
                             "Adapter restart attempt failed"
                         );
+                        note_interface_open_failed(&device_faults, &id, &e);
                         if let Some(delay) = tracker.next_delay(&id) {
                             health_state
                                 .lock()
@@ -843,9 +878,10 @@ async fn run(
                 }
             }
         }
-        if let Some(task) = publish_task.take() {
-            task.abort();
-            let _ = task.await;
+        // Adapters are stopped first so no publication is added while the
+        // graceful offline goes out; the outbox keeps anything unacknowledged.
+        if let Some(handle) = output_mqtt.take() {
+            handle.shutdown().await;
         }
     })
     .await;
@@ -877,12 +913,31 @@ async fn wait_for_api_task(
 }
 
 async fn wait_for_mqtt_task(
-    publish_task: &mut Option<tokio::task::JoinHandle<()>>,
+    output_mqtt: &mut Option<output_mqtt::OutputMqttHandle>,
 ) -> Result<(), tokio::task::JoinError> {
-    match publish_task {
-        Some(task) => task.await,
+    match output_mqtt {
+        Some(handle) => handle.wait().await,
         None => std::future::pending().await,
     }
+}
+
+/// Records an Input Adapter start failure as the contract's
+/// `interface-open-failed` fault; the reason follows the I/O error kind.
+fn note_interface_open_failed(
+    faults: &iotkit_core_pipeline::DeviceFaults,
+    adapter: &AdapterId,
+    error: &iotkit_edge_node::input_adapters::AdapterStartError,
+) {
+    let reason = error
+        .io_kind
+        .map(iotkit_core_pipeline::InterfaceOpenReason::from_io_kind)
+        .unwrap_or(iotkit_core_pipeline::InterfaceOpenReason::IoError);
+    faults.interface_open_failed(
+        adapter.as_str(),
+        reason,
+        Some(error.message.clone()),
+        iotkit_core_pipeline::uptime_ms(),
+    );
 }
 
 async fn shutdown_with_timeout<F>(timeout: Duration, cleanup: F) -> bool
@@ -927,22 +982,28 @@ fn start_input_adapter(
     ingest: IngestClient,
     healthy_tx: tokio::sync::mpsc::Sender<ActivityNotice>,
     generation: u64,
-) -> Result<AdapterId, String> {
+    device_faults: iotkit_core_pipeline::DeviceFaults,
+) -> Result<AdapterId, iotkit_edge_node::input_adapters::AdapterStartError> {
+    let host_error = |message: String| iotkit_edge_node::input_adapters::AdapterStartError {
+        io_kind: None,
+        message,
+    };
     let adapter_id = AdapterId::new(instance.instance_id().as_str());
     if host.contains(&adapter_id) {
-        return Err(format!(
+        return Err(host_error(format!(
             "duplicate adapter instance ID: {}",
             instance.instance_id()
-        ));
+        )));
     }
     let context = AdapterStartContext::try_new(
         instance.instance_id().clone(),
         instance.source().clone(),
         SourceBoundIngest::new(instance.source().clone(), ingest),
     )
-    .map_err(|error| format!("invalid adapter source binding: {error}"))?;
+    .map_err(|error| host_error(format!("invalid adapter source binding: {error}")))?;
     let running = instance.start(context)?;
-    register_running_adapter(host, running, healthy_tx, generation)
+    register_running_adapter(host, running, healthy_tx, generation, device_faults)
+        .map_err(host_error)
 }
 
 #[derive(Debug, Clone)]
@@ -958,24 +1019,12 @@ fn activity_notice_is_current(
     active_generations.get(&notice.adapter_id) == Some(&notice.generation)
 }
 
-fn may_start_status_publisher(
-    health: &Arc<Mutex<health::HealthState>>,
-    configured_adapter_count: usize,
-) -> bool {
-    let health = health.lock().expect("health state mutex poisoned");
-    health.collector_alive
-        && health.adapters.len() == configured_adapter_count
-        && health
-            .adapters
-            .iter()
-            .all(|adapter| adapter.status == health::AdapterRuntimeStatus::Running)
-}
-
 fn register_running_adapter(
     host: &mut AdapterHost,
     running: RunningInputAdapter,
     healthy_tx: tokio::sync::mpsc::Sender<ActivityNotice>,
     generation: u64,
+    device_faults: iotkit_core_pipeline::DeviceFaults,
 ) -> Result<AdapterId, String> {
     let id = AdapterId::new(running.instance_id.as_str());
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AdapterEvent>(1);
@@ -999,6 +1048,7 @@ fn register_running_adapter(
         });
         let activity_task = tokio::spawn(async move {
             let mut last_seen = None;
+            let mut interface = InterfaceState::Unreported;
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
@@ -1011,6 +1061,25 @@ fn register_running_adapter(
                         adapter_id: activity_adapter_id.clone(),
                         generation,
                     });
+                }
+                // An adapter that opens its interface itself (BravePI serial)
+                // reports the result here; mirror it into the device faults.
+                if snapshot.interface != interface {
+                    interface = snapshot.interface;
+                    match &interface {
+                        InterfaceState::OpenFailed { kind, detail } => {
+                            device_faults.interface_open_failed(
+                                activity_adapter_id.as_str(),
+                                iotkit_core_pipeline::InterfaceOpenReason::from_io_kind(*kind),
+                                Some(detail.clone()),
+                                iotkit_core_pipeline::uptime_ms(),
+                            );
+                        }
+                        InterfaceState::Open => {
+                            device_faults.interface_opened(activity_adapter_id.as_str());
+                        }
+                        InterfaceState::Unreported => {}
+                    }
                 }
             }
         });

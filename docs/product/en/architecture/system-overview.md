@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 21
+revision: 22
 ---
 
 # Architecture
@@ -157,20 +157,27 @@ committing the matching activation result and marking the incarnation active. Ph
 deletion of the pre-registration prefix is Edge-Node-local cleanup against the fixed boundary;
 it changes neither `accepted-through` nor post-activation purge authority.
 
-`mqtt_publish_task` is the active production exit binding. The older `publish_task` HTTPS code is
-retained only as transitional code and is not spawned. A broker PUBACK confirms transport receipt
-only; IoTKit Edge Node retains its outbox until IoTKit Edge commits raw records and publishes
-application-level `accepted-through`.
+With the redesign in [#232](https://github.com/w-pinkietech/iotkit/issues/232), the Edge
+Node's `[output.mqtt]` starts the publishing side of the
+[MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md)
+(`edge-node/apps/node/src/output_mqtt.rs`). It publishes the outbox the pipelines fill in
+insertion order with one publication in flight, deletes a row on the Broker's PUBACK, and after a
+reconnect publishes the status first and then retransmits the outbox. The Edge Node no longer
+sends or receives the old contract's record batches, descriptors, activation, or
+`accepted-through`. The central `iotkit-edge` and its custody path remain as described below in
+this section, but nothing reaches them from the new Edge Node; child issue 5 deletes them.
 
 ### Operational status and causal diagnosis
 
-Alongside custody, an Edge Node publishes the bounded v1 `status` heartbeat on its own
-retained QoS 1 MQTT topic. It sends one immediately after its MQTT subscriptions are confirmed and
-then every 30 seconds. This is operational evidence only: its local view of
-`accepted_through` and pending publications never advances the custody cursor, authorizes purge,
-or turns a Broker PUBACK into durable acceptance. IoTKit Edge stores only the latest accepted
-status for the currently active ledger epoch. A retained replay can provide historical detail but
-does not make a Node live.
+The Edge Node's status follows section 7 of the
+[MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md). It publishes
+`online` or `degraded` with `faults` right after connecting and every `[status]
+heartbeat_interval`, and publishes the start and recovery of a storage failure or of an Input
+Adapter's interface open failure without waiting for the interval. On an abnormal disconnect the
+Broker publishes the Will `offline`; on a graceful shutdown the Edge Node itself publishes an
+`offline` with the shutdown time before disconnecting. A Broker PUBACK is the boundary of the
+Edge Node's delivery responsibility and does not mean the consumer stored anything. The old
+`status` heartbeat (`accepted_through`, pending publications) is no longer sent.
 
 IoTKit Edge keeps its own process-local Broker/subscription state separately from that Node
 heartbeat. The existing server-rendered `/status` page orders evidence as Sensor input, Input

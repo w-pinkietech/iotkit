@@ -5,7 +5,7 @@ description: "Defines the complete product scope, component responsibilities, au
 language: en
 translation_key: concepts.product-model
 status: stable
-revision: 6
+revision: 7
 ---
 
 # IoTKit product model
@@ -156,6 +156,10 @@ bind = "0.0.0.0:8443"
 ~~~
 
 `pipelines.export_path` is a backup derived from the database and written after every committed change to the pipeline definitions. It is not read at startup; restoring from it is an explicit import operation.
+
+### When an Input Adapter cannot open its interface
+
+The device does not exit when an Input Adapter cannot open its hardware interface (serial, I2C, GPIO). The other Input Adapters, the pipelines, and MQTT publishing continue, and the failing adapter is retried with backoff. Meanwhile the status `faults` carry `interface-open-failed` with the adapter's instance name and the reason (`not-found` / `permission-denied` / `busy` / `io-error`), and the fault disappears once the interface opens ([MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md), section 7.1). Configuration mistakes (an unknown adapter type, a value out of range) remain startup errors.
 
 ## Pipeline definition (device-local redesign)
 

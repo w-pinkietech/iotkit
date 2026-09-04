@@ -5,7 +5,7 @@ description: "Input Adapterのidentity、権限、host API、設定、lifecycle�
 language: ja
 translation_key: contracts.input-adapter-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit northbound Input Adapter host契約 v1
@@ -97,7 +97,7 @@ Facadeはbound source、既存ID recipe、`declaration_version=None`でimmutable
 
 `try_retry`はbound sourceを検証してunchanged Envelopeを再queueします。`Full`はhandle ownershipをcallerへ返します。Packageはfinal Ack semanticsだけでupstream cursorを進め、local abandonmentからcustodyを捏造しません。
 
-Activityはsuccessful physical decode、queue admissionのprocess-monotonic timestampとdropped diagnostic countを持つcoalescing latest snapshotです。Diagnosticはbounded、best-effort、redactedで、generic kindは`Transport`、`Protocol`、`Decode`、`MeasurementMapping`、`ClientQueueFull`、`ClientClosed`、`DeviceUnavailable`です。Adapter固有codeはtype ID namespaceを使い、diagnosticをauthoritative healthとしません。
+Activityはsuccessful physical decode、queue admissionのprocess-monotonic timestampとdropped diagnostic count、それにinterface stateを持つcoalescing latest snapshotです。Interface stateは`Unreported`、`Open`、`OpenFailed`（`std::io::ErrorKind`と短い説明）の3値で、ハードウェアのインタフェース（シリアル、I2C、GPIO）を自分で開くadapterが`interface_opened` / `interface_open_failed`で報告します。hostはこれをstatusの`interface-open-failed` fault（[MQTT Output Adapter契約 v1](mqtt-output-adapter-v1.md)第7.1節）として公開し、`Open`で消します。起動時に開けずに`start`が`std::io::Error`を返すadapterは、そのerror kindがそのまま同じfaultの理由になります。Diagnosticはbounded、best-effort、redactedで、generic kindは`Transport`、`Protocol`、`Decode`、`MeasurementMapping`、`ClientQueueFull`、`ClientClosed`、`DeviceUnavailable`です。Adapter固有codeはtype ID namespaceを使い、diagnosticをauthoritative healthとしません。
 
 Completionは全async taskとblocking reader thread停止後にlossless resolveし、`RequestedStop`、reason付き`UnexpectedExit`、`Panic`を表します。Shutdownはidempotent graceful stop requestだけで、timeoutはEdge Nodeが所有します。Start error後にtask/thread/open transportを残しません。
 

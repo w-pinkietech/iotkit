@@ -5,7 +5,7 @@ description: "IoTKitの完全な製品範囲、component責務、権威の流れ
 language: ja
 translation_key: concepts.product-model
 status: stable
-revision: 6
+revision: 7
 ---
 
 # IoTKit製品モデル
@@ -124,6 +124,10 @@ bind = "0.0.0.0:8443"
 ~~~
 
 `pipelines.export_path`は、pipeline定義の変更がコミットされるたびにDBから書き出すバックアップである。起動時には読まず、復元は明示的なimport操作で行う。
+
+### Input Adapterがインタフェースを開けないとき
+
+Input Adapterがハードウェアのインタフェース（シリアル、I2C、GPIO）を開けなくても、端末は終了しない。他のInput Adapterとpipeline、MQTTへの公開は続き、開けないadapterはbackoff付きで再試行する。その間、statusの`faults`に`interface-open-failed`（adapterのインスタンス名と`not-found` / `permission-denied` / `busy` / `io-error`の理由）が載り、開けた時点で消える（[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)第7.1節）。設定の誤り（存在しないadapter種別、範囲外の値）は従来どおり起動エラーである。
 
 ## pipeline定義（端末完結の再設計）
 

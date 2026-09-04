@@ -24,6 +24,11 @@ pub enum PipelineCommand {
     Import(ImportArgs),
     /// Start a new series for one pipeline and clear its evaluation state.
     Reset(ResetArgs),
+    /// Apply the definitions in the file to existing pipelines one by one.
+    /// Tuning changes keep the series; structural changes start a new one.
+    Update(UpdateArgs),
+    /// Delete one pipeline and clear its retained value at the Broker.
+    Delete(DeleteArgs),
 }
 
 #[derive(Args)]
@@ -44,6 +49,21 @@ pub struct ImportArgs {
 
 #[derive(Args)]
 pub struct ResetArgs {
+    pub id: String,
+    #[arg(long)]
+    pub export_path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct UpdateArgs {
+    /// A `pipelines.toml`-shaped file; every `[[pipeline]]` in it is updated.
+    pub file: PathBuf,
+    #[arg(long)]
+    pub export_path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct DeleteArgs {
     pub id: String,
     #[arg(long)]
     pub export_path: Option<PathBuf>,
@@ -83,6 +103,30 @@ pub fn run(conn: &Connection, db_path: &Path, command: PipelineCommand) -> AppRe
             let result = dispatch(
                 conn,
                 iotkit_core_ops::ops::pipeline_ops::RESET,
+                serde_json::json!({ "id": args.id }),
+                false,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            export_after_commit(conn, db_path, args.export_path)
+        }
+        PipelineCommand::Update(args) => {
+            let definitions = iotkit_core_pipeline::read_definitions(&args.file)?;
+            let mut results = Vec::with_capacity(definitions.len());
+            for definition in definitions {
+                results.push(dispatch(
+                    conn,
+                    iotkit_core_ops::ops::pipeline_ops::UPDATE,
+                    serde_json::json!({ "definition": definition }),
+                    false,
+                )?);
+            }
+            println!("{}", serde_json::to_string_pretty(&results)?);
+            export_after_commit(conn, db_path, args.export_path)
+        }
+        PipelineCommand::Delete(args) => {
+            let result = dispatch(
+                conn,
+                iotkit_core_ops::ops::pipeline_ops::DELETE,
                 serde_json::json!({ "id": args.id }),
                 false,
             )?;

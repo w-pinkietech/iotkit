@@ -63,15 +63,30 @@ async fn generic_running_adapter_drives_health_and_closed_lifecycle() {
     let (runtime, running) = iotkit_input_adapter_host_api::runtime_channels(instance_id, 1);
     let (healthy_tx, mut healthy_rx) = tokio::sync::mpsc::channel(1);
     let mut host = AdapterHost::new();
-    let adapter_id = register_running_adapter(&mut host, running, healthy_tx, 7).expect("register");
+    let device_faults = iotkit_core_pipeline::DeviceFaults::default();
+    let adapter_id =
+        register_running_adapter(&mut host, running, healthy_tx, 7, device_faults.clone())
+            .expect("register");
 
     runtime.activity.physical_decode();
+    runtime
+        .activity
+        .interface_open_failed(std::io::ErrorKind::PermissionDenied, "/dev/ttyAMA0");
     let healthy = tokio::time::timeout(Duration::from_secs(2), healthy_rx.recv())
         .await
         .expect("activity monitor timeout")
         .expect("activity monitor closed");
     assert_eq!(healthy.adapter_id, adapter_id);
     assert_eq!(healthy.generation, 7);
+    let fault = wait_for_interface_fault(&device_faults, "reference_one", true).await;
+    assert_eq!(
+        fault.reason,
+        iotkit_core_pipeline::InterfaceOpenReason::PermissionDenied
+    );
+    assert_eq!(fault.detail.as_deref(), Some("/dev/ttyAMA0"));
+
+    runtime.activity.interface_opened();
+    wait_for_interface_fault(&device_faults, "reference_one", false).await;
 
     runtime
         .completion
@@ -82,6 +97,33 @@ async fn generic_running_adapter_drives_health_and_closed_lifecycle() {
         .await
         .expect("host close timeout");
     assert!(matches!(closed, Some(AdapterHostEvent::AdapterClosed(id)) if id == adapter_id));
+}
+
+/// The activity monitor samples once a second; wait until the fault for
+/// `adapter` is present (or absent) and return it.
+async fn wait_for_interface_fault(
+    faults: &iotkit_core_pipeline::DeviceFaults,
+    adapter: &str,
+    present: bool,
+) -> iotkit_core_pipeline::InterfaceOpenFault {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = faults.snapshot();
+            match snapshot.interfaces.get(adapter) {
+                Some(fault) if present => return fault.clone(),
+                None if !present => {
+                    return iotkit_core_pipeline::InterfaceOpenFault {
+                        since_uptime_ms: 0,
+                        reason: iotkit_core_pipeline::InterfaceOpenReason::IoError,
+                        detail: None,
+                    };
+                }
+                _ => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("interface fault did not reach the expected state")
 }
 
 #[test]
@@ -102,22 +144,4 @@ fn stale_activity_from_a_previous_runtime_generation_is_ignored() {
             generation: 2,
         }
     ));
-}
-
-#[test]
-fn mqtt_status_publisher_waits_for_collector_and_all_configured_adapters() {
-    let health = Arc::new(Mutex::new(health::HealthState::new(90)));
-    assert!(!may_start_status_publisher(&health, 1));
-
-    {
-        let mut state = health.lock().unwrap();
-        state.collector_alive = true;
-    }
-    assert!(
-        may_start_status_publisher(&health, 0),
-        "adapterless service-only mode is ready once its collector starts"
-    );
-    health.lock().unwrap().note_adapter_running("adapter-1");
-    assert!(may_start_status_publisher(&health, 1));
-    assert!(!may_start_status_publisher(&health, 2));
 }

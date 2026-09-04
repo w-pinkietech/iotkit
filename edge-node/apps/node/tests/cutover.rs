@@ -141,8 +141,8 @@ fn normal_pre_recovery_and_current_databases_keep_migration_startup_behavior() {
             "stdout={stdout}\nstderr={stderr}"
         );
         assert!(
-            stdout.contains("failed to prepare MQTT exit publication target")
-                || stderr.contains("failed to prepare MQTT exit publication target"),
+            stdout.contains("failed to prepare the MQTT Output Adapter")
+                || stderr.contains("failed to prepare the MQTT Output Adapter"),
             "stdout={stdout}\nstderr={stderr}"
         );
 
@@ -190,8 +190,8 @@ fn missing_and_empty_databases_reach_normal_post_migration_startup() {
             "{name}: stdout={stdout}\nstderr={stderr}"
         );
         assert!(
-            stdout.contains("failed to prepare MQTT exit publication target")
-                || stderr.contains("failed to prepare MQTT exit publication target"),
+            stdout.contains("failed to prepare the MQTT Output Adapter")
+                || stderr.contains("failed to prepare the MQTT Output Adapter"),
             "{name}: stdout={stdout}\nstderr={stderr}"
         );
         assert!(db_path.exists(), "{name} database was not created");

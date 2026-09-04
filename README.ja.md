@@ -197,10 +197,11 @@ IoTKit ConsoleはRustの型付きserver-side renderingを使い、browser動作�
 
 CIは各PRで、軽量なrepositoryチェック、Rust workspace全体（fmt、clippy、テスト）、
 一気通貫テストの3つのlaneを実行し、安定した`required CI` aggregateを公開します
-（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。一気通貫テストのlaneは現在、
-MQTT Output Adapter v1のfixtureを実際のMosquittoへ流して購読側で照合します。
-[#232](https://github.com/w-pinkietech/iotkit/issues/232)の再設計がpublishできる段階で、
-sample Input AdapterからBrokerを経て独立したconsumerまで製品を動かすテストへ育てます。
+（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。一気通貫テストのlane
+（`scripts/test-journey.sh`）は、再設計後の製品を`trial-sample` Input Adapterから
+`iotkit-edge-node`と実際のMosquittoを経て独立したconsumerまで動かし、最小ループに続けて
+障害注入（Broker停止、`kill -9`、調整項目の変更、削除、保存失敗、正常終了）を確認します。
+これが[#232](https://github.com/w-pinkietech/iotkit/issues/232)の再設計の受け入れ証拠です。
 テスト方針は[`.agents/testing.md`](.agents/testing.md)にあります。
 localでは`scripts/verify.sh --workspace`を明示的な診断に使い、現行製品のrelease前には
 `test-edge-host-release-gate.sh`を一度実行します。

@@ -5,12 +5,12 @@ description: "IoTKit端末がObservationとstatusを標準MQTT Brokerへ公開�
 language: ja
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 4
+revision: 5
 ---
 
 # IoTKit MQTT Output Adapter契約 v1
 
-状態: 契約を固定した段階。IoTKit本体からの公開は [#232](https://github.com/w-pinkietech/iotkit/issues/232) の子Issueで実装する。
+状態: IoTKit本体（`iotkit-edge-node`の`[output.mqtt]`）がこの契約で公開している（[#232](https://github.com/w-pinkietech/iotkit/issues/232) 子Issue 4、#248）。
 
 ## 1. 目的
 
@@ -197,7 +197,7 @@ payload：
 
 | kind | 意味 | 追加field | `value` | 回復 |
 |---|---|---|---|---|
-| `storage-write-failed` | 入力のSQLiteトランザクションが失敗し、新しい入力を破棄している | `count`：開始からの破棄件数 | `degraded`（常に対になる） | 保存が1回成功したとき |
+| `storage-write-failed` | 入力のSQLiteトランザクションが失敗し、新しい入力を破棄している | `count`：開始から失敗した保存トランザクションの件数。送信側が同じ入力を再送して再び失敗した場合も数える | `degraded`（常に対になる） | 保存が1回成功したとき |
 | `interface-open-failed` | Input Adapterがハードウェアのインタフェース（シリアル、I2C、GPIO）を開けない。そのadapterを入力にするpipelineのObservationは止まる | `adapter`：インスタンス名、`reason`：`not-found` / `permission-denied` / `busy` / `io-error` | `online`（端末自体は動いている） | 開けたとき |
 
 ```json
@@ -257,7 +257,8 @@ Brokerはそのtopicのretain値を消し、以後に購読するconsumerには�
 | 拒否されるべき例 | `testdata/observation/v1/invalid/*.json` |
 | Schema適合と正規形の検査 | `node scripts/check-observation-fixtures.mjs` |
 | 受信側の照合（Brokerへ流して購読側で確認） | `scripts/test-observation-consumer.sh` |
-| producerの照合（IoTKitが生成するtopicとbytesをfixtureと比較） | `edge-node/core/pipeline/tests/unit/wire_tests.rs`（`cargo test -p iotkit-core-pipeline`） |
+| producerの照合（IoTKitが生成するtopicとbytesをfixtureと比較） | `edge-node/core/pipeline/tests/unit/wire_tests.rs`（Observation）と`status_tests.rs`（status）（`cargo test -p iotkit-core-pipeline`） |
+| 一気通貫（IoTKit本体 → Broker → 独立したconsumer。L1最小ループとL2障害注入） | `scripts/test-journey.sh`、`scripts/journey/check_messages.py` |
 
 fixtureはproducerとconsumerの両方の正である。IoTKitのconformance testは公開するtopicとbytesをfixtureと比較し、consumerのconformance testとシミュレータはfixtureからpayloadを生成する。
 文書、Schema、fixture、検査のどれかが食い違えば契約の欠陥として扱い、黙って片方に合わせない。
