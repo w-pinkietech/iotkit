@@ -1,10 +1,10 @@
 {
-  "description": "offline published by the Broker as IoTKit's Will on abnormal disconnect. timestamp is null because IoTKit did not observe the disconnect time.",
+  "description": "offline published by the Broker as IoTKit's Will on abnormal disconnect. uptime_ms and unix_epoch_ms are null because IoTKit did not observe the disconnect.",
   "channel": "status",
   "status_form": "offline-will",
   "topic": "iotkit/v1/edge-node/rpi1/status",
   "qos": 1,
   "retain": true,
-  "payload": "{\"timestamp\":null,\"value\":\"offline\"}",
+  "payload": "{\"uptime_ms\":null,\"unix_epoch_ms\":null,\"value\":\"offline\"}",
   "consumer_note": "Mark the edge node offline immediately without waiting for the heartbeat timeout."
 }

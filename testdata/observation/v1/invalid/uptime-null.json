@@ -1,0 +1,7 @@
+{
+  "channel": "observation",
+  "kind": "accumulated-count",
+  "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-cycle-count/accumulated-count",
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":42,\"uptime_ms\":null,\"unix_epoch_ms\":1784190000123,\"value\":1250}",
+  "reason": "uptime_ms is an integer on every Observation; only the Will status may be null"
+}

@@ -33,9 +33,18 @@
       "minimum": 1,
       "maximum": 9007199254740991
     },
-    "timestamp": {
-      "description": "Unix epoch milliseconds when IoTKit received the input that settled this output. Not monotonic; consumers order by sequence.",
+    "uptime_ms": {
+      "description": "Milliseconds since the IoTKit process started, taken from a monotonic clock. Always present. Monotonic within one process run; a decrease means IoTKit restarted. Use it for intervals and gap lengths, not for calendar placement.",
       "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "unix_epoch_ms": {
+      "description": "Wall-clock time (Unix epoch milliseconds) at which IoTKit received the input that settled this output, or null when IoTKit cannot vouch for its clock (for example before NTP synchronization). The key is always present. Not monotonic; consumers order by sequence.",
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0
     },
     "common": {
@@ -43,7 +52,8 @@
       "required": [
         "series_id",
         "sequence",
-        "timestamp",
+        "uptime_ms",
+        "unix_epoch_ms",
         "value"
       ],
       "additionalProperties": false,
@@ -54,8 +64,11 @@
         "sequence": {
           "$ref": "#/$defs/sequence"
         },
-        "timestamp": {
-          "$ref": "#/$defs/timestamp"
+        "uptime_ms": {
+          "$ref": "#/$defs/uptime_ms"
+        },
+        "unix_epoch_ms": {
+          "$ref": "#/$defs/unix_epoch_ms"
         },
         "value": {}
       }

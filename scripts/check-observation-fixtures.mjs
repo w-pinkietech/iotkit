@@ -5,7 +5,7 @@
 //   - a non-empty payload parses as JSON and matches the kind- or
 //     status-form-specific definition
 //   - the payload is in canonical form (compact JSON, key order
-//     series_id, sequence, timestamp, value) so producer conformance can
+//     series_id, sequence, uptime_ms, unix_epoch_ms, value) so producer conformance can
 //     compare bytes
 //   - every file under invalid/ is rejected for the reason it states
 // Requires `npm ci --prefix scripts/docs` (ajv).
@@ -48,8 +48,8 @@ const validatePayload = {
 };
 
 const canonicalKeyOrder = {
-  observation: ["series_id", "sequence", "timestamp", "value"],
-  status: ["timestamp", "value"],
+  observation: ["series_id", "sequence", "uptime_ms", "unix_epoch_ms", "value"],
+  status: ["uptime_ms", "unix_epoch_ms", "value"],
 };
 
 function canonical(channel, parsed) {

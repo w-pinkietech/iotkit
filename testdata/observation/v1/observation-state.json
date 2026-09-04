@@ -5,6 +5,6 @@
   "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-temperature-high/state",
   "qos": 1,
   "retain": true,
-  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":7,\"timestamp\":1784190000123,\"value\":true}",
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":7,\"uptime_ms\":8123456,\"unix_epoch_ms\":1784190000123,\"value\":true}",
   "consumer_note": "Business meaning (alarm, equipment state) is assigned by consumer registration, not by IoTKit."
 }

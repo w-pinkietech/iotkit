@@ -5,6 +5,6 @@
   "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-temperature/measurement",
   "qos": 1,
   "retain": true,
-  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":42,\"timestamp\":1784190000123,\"value\":23.5}",
-  "consumer_note": "Reflect the latest value. A missing sequence is a diagnostic of incomplete history, not an error."
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":42,\"uptime_ms\":8123456,\"unix_epoch_ms\":1784190000123,\"value\":23.5}",
+  "consumer_note": "Reflect the latest value. A missing sequence is a diagnostic of incomplete history, not an error. Use uptime_ms for the interval since the previous observation of the same run; unix_epoch_ms is null while the device clock is untrusted."
 }
