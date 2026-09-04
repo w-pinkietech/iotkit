@@ -185,6 +185,107 @@ impl fmt::Display for DeviceKey {
     }
 }
 
+// ── 公開識別子（MQTT Output Adapter v1 契約） ───────────────
+
+/// edge-node-id と pipeline-id に共通する制約違反。
+///
+/// 契約: `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$` に一致し、UTF-8 で 1〜64 バイト。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentifierError {
+    Empty,
+    TooLong { bytes: usize },
+    InvalidChar { position: usize, ch: char },
+    LeadingOrTrailingHyphen,
+}
+
+impl fmt::Display for IdentifierError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "must not be empty"),
+            Self::TooLong { bytes } => write!(f, "must be at most 64 bytes, got {bytes}"),
+            Self::InvalidChar { position, ch } => write!(
+                f,
+                "must contain only lowercase ASCII letters, digits, and '-', found {ch:?} at byte {position}"
+            ),
+            Self::LeadingOrTrailingHyphen => write!(f, "must not start or end with '-'"),
+        }
+    }
+}
+
+impl std::error::Error for IdentifierError {}
+
+pub const IDENTIFIER_MAX_BYTES: usize = 64;
+
+/// Checks the shared grammar for edge-node-id and pipeline-id.
+pub fn validate_identifier(value: &str) -> Result<(), IdentifierError> {
+    if value.is_empty() {
+        return Err(IdentifierError::Empty);
+    }
+    if value.len() > IDENTIFIER_MAX_BYTES {
+        return Err(IdentifierError::TooLong { bytes: value.len() });
+    }
+    if let Some((position, ch)) = value
+        .char_indices()
+        .find(|(_, ch)| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || *ch == '-'))
+    {
+        return Err(IdentifierError::InvalidChar { position, ch });
+    }
+    if value.starts_with('-') || value.ends_with('-') {
+        return Err(IdentifierError::LeadingOrTrailingHyphen);
+    }
+    Ok(())
+}
+
+macro_rules! contract_identifier {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn parse(value: impl Into<String>) -> Result<Self, IdentifierError> {
+                let value = value.into();
+                validate_identifier(&value)?;
+                Ok(Self(value))
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = IdentifierError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::parse(value)
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+    };
+}
+
+contract_identifier!(
+    /// IoTKit 端末を識別する安定した ID。起動設定で与え、Broker namespace 内で一意。
+    EdgeNodeId
+);
+
+contract_identifier!(
+    /// 端末内の処理 pipeline を識別する、利用者が設定する安定した ID。
+    PipelineId
+);
+
 #[cfg(test)]
 #[path = "../tests/unit/lib_tests.rs"]
 mod tests;
