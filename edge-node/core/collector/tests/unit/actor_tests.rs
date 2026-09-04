@@ -8,12 +8,7 @@ pub(super) fn allow_missing_authentication_proof() -> bool {
 }
 
 fn test_db() -> iotkit_core_storage::DbHandle {
-    let mut all = iotkit_core_storage::MIGRATIONS.to_vec();
-    all.extend_from_slice(ledger::MIGRATIONS);
-    all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
-    all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
-    all.sort_by_key(|m| m.version);
-    iotkit_core_storage::init_db_memory(&all).unwrap()
+    iotkit_core_storage::init_db_memory(&migration_set()).unwrap()
 }
 
 fn migration_set() -> Vec<iotkit_core_storage::Migration> {
@@ -21,6 +16,7 @@ fn migration_set() -> Vec<iotkit_core_storage::Migration> {
     all.extend_from_slice(ledger::MIGRATIONS);
     all.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
     all.extend_from_slice(iotkit_core_publish::MIGRATIONS);
+    all.extend_from_slice(iotkit_core_pipeline::MIGRATIONS);
     all.sort_by_key(|m| m.version);
     all
 }
@@ -64,6 +60,7 @@ fn process_test(
         policy,
         &UntrustedSystemClock,
         FreshnessLimits::default(),
+        None,
         None,
         request,
         true,
@@ -189,7 +186,7 @@ async fn device_principal_issuer_is_returned_only_by_receiver_composition() {
 async fn edge_composition_receives_distinct_local_and_device_issuers() {
     let db = test_db();
     let (collector, local, device, _handle) =
-        Collector::spawn_fully_composed(db, Arc::new(PermissiveRegistry), 16);
+        Collector::spawn_fully_composed(db, Arc::new(PermissiveRegistry), 16, None);
     let _local_principal = local.official_adapter("principal:local", "local");
     let _device_issuer = device;
     let clone = collector.clone();
@@ -1825,6 +1822,7 @@ async fn forged_source_is_envelope_rejected_and_intrusion_hook_is_bounded() {
         Arc::new(UntrustedSystemClock),
         FreshnessLimits::default(),
         Some(signal_tx),
+        None,
     );
     let mut envelope = env("forged-1", "ble:aa", "temperature_c").envelope;
     envelope.source = "attacker-controlled-source".into();
@@ -2039,6 +2037,7 @@ async fn scope_violation_precedes_malformed_measurement_and_emits_intrusion() {
         Arc::new(UntrustedSystemClock),
         FreshnessLimits::default(),
         Some(intrusion_tx),
+        None,
     );
     let request = device_request(
         "principal-a",
@@ -2081,6 +2080,7 @@ async fn trusted_freshness_failures_are_positional_and_untrusted_absolute_time_h
             trusted_wall_time_ms: Some(10_000),
         })),
         limits,
+        None,
         None,
     );
     let mut envelope = env("freshness-mixed", "ble:aa", "temperature_c").envelope;
@@ -2184,4 +2184,199 @@ async fn oversized_envelope_is_rejected_whole() {
             ..
         }
     ));
+}
+
+// ── pipeline delivery (#232 child issue 3) ──────────────────
+
+fn test_time() -> iotkit_core_pipeline::InputTime {
+    iotkit_core_pipeline::InputTime {
+        uptime_ms: 0,
+        unix_epoch_ms: None,
+    }
+}
+
+fn pipeline_delivery(faults: iotkit_core_pipeline::PipelineFaults) -> Arc<PipelineDelivery> {
+    let engine = iotkit_core_pipeline::PipelineEngine::new("rpi1".parse().unwrap());
+    let mut delivery = PipelineDelivery::new(engine, faults);
+    delivery.register_adapter("test-adapter", "line_a");
+    Arc::new(delivery)
+}
+
+fn count_pipeline(id: &str, adapter: &str, key: &str) -> iotkit_core_pipeline::PipelineDefinition {
+    iotkit_core_pipeline::PipelineDefinition {
+        id: id.parse().unwrap(),
+        kind: iotkit_core_pipeline::PipelineKind::AccumulatedCount,
+        input: iotkit_core_pipeline::PipelineInput {
+            adapter: adapter.into(),
+            subject: None,
+            measurement_key: key.into(),
+            channel_index: None,
+            value_index: 0,
+        },
+        trigger: Some(iotkit_core_pipeline::Trigger::OnTransition),
+        unit: None,
+        display_name: None,
+        calibration: iotkit_core_pipeline::Calibration::default(),
+        detector: Some(iotkit_core_pipeline::Detector {
+            mode: iotkit_core_pipeline::DetectorMode::HighActive,
+            rise_threshold: 0.5,
+            fall_threshold: 0.5,
+            rise_debounce_ms: 0,
+            fall_debounce_ms: 0,
+        }),
+    }
+}
+
+fn env_with_value(id: &str, hw: &str, key: &str, value: f64) -> IngestRequest {
+    let mut request = env(id, hw, key);
+    request.envelope.items[0].values = vec![value];
+    request
+}
+
+fn process_with_pipelines(
+    conn: &rusqlite::Connection,
+    cache: &mut ResolutionCache,
+    pipelines: &PipelineDelivery,
+    request: &IngestRequest,
+) -> Result<EnvelopeAck, ProcessError> {
+    process_envelope_mode(
+        conn,
+        cache,
+        &PermissiveRegistry,
+        &UntrustedSystemClock,
+        FreshnessLimits::default(),
+        None,
+        Some(pipelines),
+        request,
+        true,
+    )
+}
+
+#[test]
+fn durable_readings_reach_matching_pipelines_in_the_accept_transaction() {
+    let db = test_db();
+    register_active(&db, "ble:aa");
+    let faults = iotkit_core_pipeline::PipelineFaults::default();
+    let pipelines = pipeline_delivery(faults.clone());
+    db.with_conn_sync(|conn| {
+        pipelines
+            .engine()
+            .create(
+                conn,
+                &count_pipeline("press-01", "line_a", "contact_state"),
+                test_time(),
+            )
+            .unwrap();
+        pipelines
+            .engine()
+            .create(
+                conn,
+                &count_pipeline("other-adapter", "line_b", "contact_state"),
+                test_time(),
+            )
+            .unwrap();
+        assert_eq!(iotkit_core_pipeline::outbox::count(conn).unwrap(), 2);
+
+        let mut cache = ResolutionCache::default();
+        for (index, value) in [0.0, 1.0, 1.0, 0.0, 1.0].into_iter().enumerate() {
+            let ack = process_with_pipelines(
+                conn,
+                &mut cache,
+                &pipelines,
+                &env_with_value(&format!("e{index}"), "ble:aa", "contact_state", value),
+            )
+            .unwrap();
+            assert!(matches!(ack.status, AckStatus::Accepted { .. }), "{ack:?}");
+        }
+
+        let rows = iotkit_core_pipeline::outbox::all(conn).unwrap();
+        assert_eq!(rows.len(), 4, "two series starts plus two increments");
+        assert!(rows[2..].iter().all(|row| row.pipeline_id == "press-01"));
+        let payload: serde_json::Value = serde_json::from_slice(&rows[3].payload).unwrap();
+        assert_eq!(payload["value"], 2);
+        assert_eq!(payload["sequence"], 3);
+        assert_eq!(
+            rows[3].topic,
+            "iotkit/v1/edge-node/rpi1/observation/press-01/accumulated-count"
+        );
+        let readings: i64 = conn
+            .query_row("SELECT COUNT(*) FROM readings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            readings, 5,
+            "the legacy raw store still receives every reading"
+        );
+        assert!(faults.snapshot().is_empty());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn readings_from_unregistered_principals_and_unmatched_inputs_skip_pipelines() {
+    let db = test_db();
+    register_active(&db, "ble:aa");
+    let pipelines = pipeline_delivery(iotkit_core_pipeline::PipelineFaults::default());
+    db.with_conn_sync(|conn| {
+        pipelines
+            .engine()
+            .create(
+                conn,
+                &count_pipeline("press-01", "line_a", "contact_state"),
+                test_time(),
+            )
+            .unwrap();
+        let mut cache = ResolutionCache::default();
+        // Different measurement key: stored, not delivered.
+        let ack = process_with_pipelines(
+            conn,
+            &mut cache,
+            &pipelines,
+            &env_with_value("e1", "ble:aa", "temperature_c", 1.0),
+        )
+        .unwrap();
+        assert!(matches!(ack.status, AckStatus::Accepted { .. }));
+        // Principal whose source is not a registered Input Adapter instance.
+        let mut foreign = env_with_value("e2", "ble:aa", "contact_state", 1.0);
+        foreign.principal =
+            IngestPrincipal::trusted_official_adapter("principal:elsewhere", "elsewhere");
+        foreign.envelope.source = "elsewhere".into();
+        let ack = process_with_pipelines(conn, &mut cache, &pipelines, &foreign).unwrap();
+        assert!(matches!(ack.status, AckStatus::Accepted { .. }));
+        assert_eq!(iotkit_core_pipeline::outbox::count(conn).unwrap(), 1);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_pipeline_that_discards_an_input_is_recorded_without_failing_the_envelope() {
+    let db = test_db();
+    register_active(&db, "ble:aa");
+    let faults = iotkit_core_pipeline::PipelineFaults::default();
+    let pipelines = pipeline_delivery(faults.clone());
+    db.with_conn_sync(|conn| {
+        let mut definition = count_pipeline("press-01", "line_a", "contact_state");
+        definition.input.value_index = 3;
+        pipelines
+            .engine()
+            .create(conn, &definition, test_time())
+            .unwrap();
+        let mut cache = ResolutionCache::default();
+        let ack = process_with_pipelines(
+            conn,
+            &mut cache,
+            &pipelines,
+            &env_with_value("e1", "ble:aa", "contact_state", 1.0),
+        )
+        .unwrap();
+        assert!(matches!(ack.status, AckStatus::Accepted { .. }));
+        let snapshot = faults.snapshot();
+        let record = snapshot.get(&definition.id).expect("fault recorded");
+        assert_eq!(record.discarded, 1);
+        assert!(record.last_error.contains("value_index 3"));
+        assert_eq!(iotkit_core_pipeline::outbox::count(conn).unwrap(), 1);
+        Ok(())
+    })
+    .unwrap();
 }

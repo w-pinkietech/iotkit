@@ -5,7 +5,7 @@ description: "Defines the complete product scope, component responsibilities, au
 language: en
 translation_key: concepts.product-model
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit product model
@@ -156,3 +156,29 @@ bind = "0.0.0.0:8443"
 ~~~
 
 `pipelines.export_path` is a backup derived from the database and written after every committed change to the pipeline definitions. It is not read at startup; restoring from it is an explicit import operation.
+
+## Pipeline definition (device-local redesign)
+
+A pipeline is the unit that converts one Input Adapter output into one Observation. One pipeline has one output; several pipelines may read the same input. Definitions live in SQLite and are edited from the Console and `nodectl pipeline` through typed operations (`pipeline.create` / `update` / `delete` / `reset` / `import`). Items are either **structural** (a change starts a new series) or **tuning** (the series continues).
+
+| Item | Class | Content |
+|---|---|---|
+| `id` | structural | pipeline-id; follows the identifier rules |
+| `kind` | structural | `measurement` / `state` / `accumulated-count`. Cannot change (delete and recreate) |
+| `input` | structural | `adapter` (Input Adapter instance name), `subject` (optional device identity; any subject when omitted), `measurement_key`, `channel_index` (optional), `value_index` (default 0) |
+| `trigger` | structural | Required only for `accumulated-count`. `on-transition` only in the first version |
+| `unit` | structural | Required only for `measurement`; forbidden for other kinds |
+| `display_name` | tuning | Display name (up to 128 characters) |
+| `calibration` | tuning | `scale` (finite and non-zero, default 1.0), `offset` (finite, default 0.0) |
+| `detector` | tuning | `mode` (`high-active` / `low-active`), `rise_threshold`, `fall_threshold` (`fall_threshold <= rise_threshold`), `rise_debounce_ms`, `fall_debounce_ms` (0 to 300,000). Forbidden for `measurement`, required for the other kinds |
+
+A series starts by these rules.
+
+- The normalized hash of the structural items is stored with the state and compared with the definition's hash at startup and on every edit. A mismatch, or a missing state row, starts a new series.
+- An explicit reset (Console, `nodectl pipeline reset <id>`) and `nodectl pipeline import <file>` start a new series. Import replaces every definition; pipelines absent from the file are treated as deleted.
+- A new `accumulated-count` series publishes `sequence = 1, value = 0` inside the transaction that started it.
+- Deleting a pipeline publishes a zero-length payload with retain to its topic, clearing the value the Broker holds.
+
+Processing one input writes the evaluation state, the current value, the next sequence, and the outbox row in one SQLite transaction. A failed input is discarded and the evaluation state stays as it was. The number of discarded inputs, the last error, and its time are kept in memory per pipeline and shown in the Console. A pipeline whose count reached 2^53−1 discards further inputs and is shown as an error.
+
+After every committed definition change, all definitions are written atomically to `pipelines.toml`. A failed export does not undo the change; it is shown as an error and retried on the next change.

@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 20
+revision: 21
 ---
 
 # Architecture
@@ -129,7 +129,8 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/core/ledger` | Device ledger、`system_id`、series identity、sighting、epoch、audit |
 | `edge-node/core/timeseries` | Reading、staging、event time、query |
 | `edge-node/core/publish` | Activation admission、publication outbox、target、cursor |
-| `edge-node/core/collector` | Dedup、series解決、quarantine、activation admission、same-transaction enqueue |
+| `edge-node/core/collector` | Dedup、series解決、quarantine、activation admission、same-transaction enqueue、端末内pipelineへの配送 |
+| `edge-node/core/pipeline` | 端末内pipeline（[#232](https://github.com/w-pinkietech/iotkit/issues/232)）：定義、evaluator、series / sequence、Observationのwire形、observation outbox、`pipelines.toml`のexport / import |
 | `edge-node/core/registry` | Standard catalogとdeployment overrideのmeasurement registry |
 | `edge-node/core/ops` | Typed operation、permission、auth、dispatch、audit |
 | `edge-node/core/recovery` (`iotkit-core-recovery`) | Optional Edge Node backup/recoveryのdurable state、完全migration set、read-only startup fence probe、recovery modelのredaction境界 |

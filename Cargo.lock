@@ -1405,6 +1405,7 @@ name = "iotkit-core-collector"
 version = "0.4.0"
 dependencies = [
  "iotkit-core-ledger",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
@@ -1445,10 +1446,12 @@ dependencies = [
  "base64",
  "getrandom 0.4.2",
  "iotkit-core-ledger",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
+ "iotkit-core-types",
  "ipnet",
  "libc",
  "password-hash",
@@ -1463,6 +1466,23 @@ dependencies = [
  "thiserror",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "iotkit-core-pipeline"
+version = "0.4.0"
+dependencies = [
+ "iotkit-core-storage",
+ "iotkit-core-types",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "uuid",
 ]
 
 [[package]]
@@ -1491,6 +1511,7 @@ dependencies = [
  "getrandom 0.4.2",
  "iotkit-core-ledger",
  "iotkit-core-ops",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
@@ -1555,6 +1576,9 @@ dependencies = [
 [[package]]
 name = "iotkit-core-types"
 version = "0.4.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "iotkit-edge"
@@ -1615,6 +1639,7 @@ dependencies = [
  "iotkit-core-engine",
  "iotkit-core-ledger",
  "iotkit-core-ops",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-recovery",
  "iotkit-core-registry",
@@ -1656,6 +1681,7 @@ dependencies = [
  "clap",
  "iotkit-core-ledger",
  "iotkit-core-ops",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-recovery",
  "iotkit-core-registry",

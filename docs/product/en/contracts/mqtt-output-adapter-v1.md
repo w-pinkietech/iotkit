@@ -5,7 +5,7 @@ description: "Defines the topics, payloads, delivery, and consumer obligations w
 language: en
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 2
+revision: 3
 ---
 
 # IoTKit MQTT Output Adapter contract v1
@@ -120,6 +120,12 @@ Consumers use them as follows.
 
 NTP synchronization is recommended and verified at installation where it is available. Interval measurement through `uptime_ms` holds on sites without it.
 
+### Publish rate
+
+- `measurement` is published only when the calibrated value differs from the last value published in the same series (on change). The first input of a series is always published. While the value is unchanged nothing is published; consumers rely on the retained latest value and the heartbeat for the current value and liveness. The worst-case rate equals the input rate.
+- `state` is published on the first input of a series and whenever the state settles to a different value after thresholding, hysteresis, and debounce.
+- `accumulated-count` is published at series start (`sequence = 1, value = 0`) and whenever the count increases.
+
 ## 5. Series rules
 
 - Changing a display name, a tuning field such as a threshold or debounce, the MQTT Broker configuration, a normal process restart, or an MQTT reconnect does not change the series.
@@ -181,6 +187,7 @@ Payload:
 ## 8. Pipeline deletion
 
 When a pipeline is deleted, IoTKit publishes a zero-length payload with retain to its Observation topic.
+This publication goes through the same outbox as every Observation, so a deletion while the Broker is unreachable still arrives after reconnection and no stale retained value is left on the Broker.
 The Broker clears the retained value, and consumers that subscribe later receive nothing.
 Consumers already subscribed receive the zero-length payload. It is not malformed JSON; it is the settled fact that this input is no longer available.
 
@@ -206,11 +213,11 @@ Consumers already subscribed receive the zero-length payload. It is not malforme
 | Cases that must be rejected | `testdata/observation/v1/invalid/*.json` |
 | Schema and canonical-form check | `node scripts/check-observation-fixtures.mjs` |
 | Consumer-side check (publish to a Broker, verify at the subscriber) | `scripts/test-observation-consumer.sh` |
+| Producer check (the topics and bytes IoTKit generates compared with the fixtures) | `edge-node/core/pipeline/tests/unit/wire_tests.rs` (`cargo test -p iotkit-core-pipeline`) |
 
 The fixtures are the reference for both producer and consumer. IoTKit's conformance test compares the topics and bytes it publishes with them; consumer conformance tests and simulators generate payloads from them.
 A disagreement between document, schema, fixtures, or checks is a contract defect; none is silently adjusted to another.
 
 ## 11. Open items
 
-- The publish rate of `measurement` (every input, on change only, or a minimum interval). Decided in a #232 child issue, followed by a revision bump of this contract.
-- Whether the zero-length deletion payload goes through the outbox so that it is guaranteed to arrive when the pipeline is deleted while the Broker is unreachable. Also decided in a child issue.
+None at present. The `measurement` publish rate (section 4) and the outbox path of the deletion notice (section 8) were decided in #232 child issue 3.

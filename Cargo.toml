@@ -19,6 +19,7 @@ members = [
     "edge-node/core/ledger",
     "edge-node/core/timeseries",
     "edge-node/core/publish",
+    "edge-node/core/pipeline",
     "edge-node/core/collector",
     "edge-node/core/registry",
     "edge-node/core/ops",

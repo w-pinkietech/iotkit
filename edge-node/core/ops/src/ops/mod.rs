@@ -8,6 +8,7 @@ mod commissioning_ops;
 mod credential_ops;
 mod device_ops;
 mod ingress_listener_ops;
+pub mod pipeline_ops;
 mod registry_ops;
 mod token_ops;
 
@@ -29,6 +30,7 @@ pub fn standard_catalog() -> &'static [OpDescriptor] {
                 ingress_listener_ops::rotate_tls_descriptor(),
             ];
             catalog.extend(credential_ops::descriptors());
+            catalog.extend(pipeline_ops::descriptors());
             debug_assert!(catalog.iter().all(|op| op.tier != crate::Tier::ReadOnly));
             catalog
         })

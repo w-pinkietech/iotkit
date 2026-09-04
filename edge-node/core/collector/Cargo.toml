@@ -9,6 +9,7 @@ repository.workspace = true
 iotkit-ingest-contract = { path = "../../ingest/contract" }
 iotkit-core-ledger = { path = "../ledger" }
 iotkit-core-publish = { path = "../publish" }
+iotkit-core-pipeline = { path = "../pipeline" }
 iotkit-core-storage = { path = "../storage" }
 iotkit-core-timeseries = { path = "../timeseries" }
 rusqlite = { version = "0.32", features = ["bundled"] }

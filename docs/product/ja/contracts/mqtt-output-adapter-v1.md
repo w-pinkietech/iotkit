@@ -5,7 +5,7 @@ description: "IoTKit端末がObservationとstatusを標準MQTT Brokerへ公開�
 language: ja
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 2
+revision: 3
 ---
 
 # IoTKit MQTT Output Adapter契約 v1
@@ -120,6 +120,12 @@ consumerは次のように使う。
 
 端末はNTP同期を推奨し、同期できる現場では導入時に確認する。同期できない現場でも、`uptime_ms`による幅の計測は成り立つ。
 
+### 公開の頻度
+
+- `measurement`は、校正後の値が同じseriesで最後に公開した値と異なるときにだけ公開する（変化時のみ）。seriesの最初の入力は常に公開する。値が変わらない間は公開せず、consumerはretainされた最新値とheartbeatで現在値と生存を判断する。最悪ケースの公開頻度は入力の頻度に等しい。
+- `state`は、seriesの最初の入力と、二値化、ヒステリシス、デバウンスを経て状態が確定して変わったときに公開する。
+- `accumulated-count`は、seriesの開始時（`sequence = 1, value = 0`）と、累積値が増えたときに公開する。
+
 ## 5. seriesの規則
 
 - 表示名の変更、閾値やデバウンスなど調整項目の変更、MQTT Broker設定の変更、通常のプロセス再起動、MQTT再接続ではseriesを変えない。
@@ -181,6 +187,7 @@ payload：
 ## 8. pipelineの削除
 
 pipelineを削除したとき、IoTKitはそのObservation topicへ長さ0のpayloadをretain有効で公開する。
+この公開は他のObservationと同じoutboxを通るため、Brokerに接続していない間に削除しても再接続後に届き、Brokerに古いretain値が残らない。
 Brokerはそのtopicのretain値を消し、以後に購読するconsumerには何も届かない。
 購読中のconsumerには長さ0のpayloadが届く。これは不正なJSONではなく、「この入力は利用できなくなった」という確定した事実である。
 
@@ -206,11 +213,11 @@ Brokerはそのtopicのretain値を消し、以後に購読するconsumerには�
 | 拒否されるべき例 | `testdata/observation/v1/invalid/*.json` |
 | Schema適合と正規形の検査 | `node scripts/check-observation-fixtures.mjs` |
 | 受信側の照合（Brokerへ流して購読側で確認） | `scripts/test-observation-consumer.sh` |
+| producerの照合（IoTKitが生成するtopicとbytesをfixtureと比較） | `edge-node/core/pipeline/tests/unit/wire_tests.rs`（`cargo test -p iotkit-core-pipeline`） |
 
 fixtureはproducerとconsumerの両方の正である。IoTKitのconformance testは公開するtopicとbytesをfixtureと比較し、consumerのconformance testとシミュレータはfixtureからpayloadを生成する。
 文書、Schema、fixture、検査のどれかが食い違えば契約の欠陥として扱い、黙って片方に合わせない。
 
 ## 11. 未決定の事項
 
-- `measurement`の公開頻度（入力ごと、変化時のみ、最小間隔のいずれか）。#232 の子Issueで決め、本契約のrevisionを上げる。
-- pipeline削除の長さ0 payloadをoutboxに入れて到達を保証するか。Broker切断中に削除した場合の扱いとして、同じく子Issueで決める。
+現時点ではない。`measurement`の公開頻度（第4節）と削除通知のoutbox経由（第8節）は、#232 子Issue 3で決めた。

@@ -5,7 +5,7 @@ description: "IoTKitの完全な製品範囲、component責務、権威の流れ
 language: ja
 translation_key: concepts.product-model
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit製品モデル
@@ -124,3 +124,29 @@ bind = "0.0.0.0:8443"
 ~~~
 
 `pipelines.export_path`は、pipeline定義の変更がコミットされるたびにDBから書き出すバックアップである。起動時には読まず、復元は明示的なimport操作で行う。
+
+## pipeline定義（端末完結の再設計）
+
+pipelineは、Input Adapterの出力1つをObservation 1つへ変換する処理の単位である。pipeline 1つにつき出力は1つで、複数のpipelineが同じ入力を参照できる。定義はSQLiteに保存し、Consoleと`nodectl pipeline`からtyped operation（`pipeline.create` / `update` / `delete` / `reset` / `import`）で編集する。項目は、変更が新しいseriesを始める**構造項目**と、seriesを継続する**調整項目**に分かれる。
+
+| 項目 | 区分 | 内容 |
+|---|---|---|
+| `id` | 構造 | pipeline-id。識別子の制約に従う |
+| `kind` | 構造 | `measurement` / `state` / `accumulated-count`。変更できない（削除して作り直す） |
+| `input` | 構造 | `adapter`（Input Adapterのインスタンス名）、`subject`（任意。デバイスの識別。省略時はsubjectを問わない）、`measurement_key`、`channel_index`（任意）、`value_index`（既定0） |
+| `trigger` | 構造 | `accumulated-count`にだけ必須。初期版は`on-transition`のみ |
+| `unit` | 構造 | `measurement`にだけ必須。他のkindでは禁止 |
+| `display_name` | 調整 | 表示名（128文字以内） |
+| `calibration` | 調整 | `scale`（有限かつ0以外、既定1.0）、`offset`（有限、既定0.0） |
+| `detector` | 調整 | `mode`（`high-active` / `low-active`）、`rise_threshold`、`fall_threshold`（`fall_threshold <= rise_threshold`）、`rise_debounce_ms`、`fall_debounce_ms`（0〜300,000）。`measurement`では禁止、他のkindでは必須 |
+
+seriesの開始は次の規則で決める。
+
+- 構造項目の正規化ハッシュを状態と一緒に保存し、起動時と定義変更時に定義のハッシュと比較する。不一致か状態行がなければ新しいseriesを始める。
+- 明示的なリセット（Console、`nodectl pipeline reset <id>`）と`nodectl pipeline import <file>`は新しいseriesを始める。importは全定義を置き換え、fileにないpipelineは削除として扱う。
+- `accumulated-count`の新しいseriesは、開始したトランザクションの中で`sequence = 1, value = 0`を公開する。
+- pipelineを削除すると、そのtopicへ長さ0のpayloadをretain有効で公開し、Brokerが保持する最新値を消す。
+
+入力1件の処理は「評価状態、現在値、次のsequence、outboxへの挿入」を1つのSQLiteトランザクションで書く。失敗した入力は破棄し、評価状態は失敗前のまま残す。pipelineごとの破棄件数、最後のエラー、時刻はメモリに保持してConsoleに表示する。累積値が2^53−1に達したpipelineは、それ以後の入力を破棄してエラーとして表示する。
+
+定義の変更がコミットされるたびに、全定義を`pipelines.toml`へアトミックに書き出す。書き出しの失敗は定義を巻き戻さず、エラーとして表示して次の変更時に再試行する。

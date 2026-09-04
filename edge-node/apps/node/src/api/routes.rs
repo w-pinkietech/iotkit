@@ -361,15 +361,29 @@ async fn post_ops_dispatch(
     };
 
     let secret_dir = state.data_dir.clone();
+    let exports_pipelines = req.op.starts_with("pipeline.") && !req.dry_run;
+    let export_path = state.cfg.pipelines_export_path.clone();
     let result = state
         .db
         .with_conn(move |conn| {
-            Ok(iotkit_core_ops::dispatch_with_secret_dir(
+            let result = iotkit_core_ops::dispatch_with_secret_dir(
                 conn,
                 standard_catalog(),
                 req,
                 Some(&secret_dir),
-            ))
+            );
+            if exports_pipelines && result.is_ok() {
+                // The definition change has committed. A failed export never
+                // undoes it; it is reported and retried on the next change.
+                if let Err(error) = iotkit_core_pipeline::export_definitions(conn, &export_path) {
+                    tracing::error!(
+                        path = %export_path.display(),
+                        %error,
+                        "pipeline definitions committed but pipelines.toml export failed"
+                    );
+                }
+            }
+            Ok(result)
         })
         .await
         .map_err(op_storage_error)?;

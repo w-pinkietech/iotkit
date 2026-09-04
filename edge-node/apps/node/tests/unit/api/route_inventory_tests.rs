@@ -54,6 +54,7 @@ async fn network_admin_passphrase_setup_route_is_absent() {
             enabled: true,
             bind: "127.0.0.1:0".parse().unwrap(),
             edge_node_id: "test".parse().unwrap(),
+            pipelines_export_path: std::path::PathBuf::from("pipelines.toml"),
         },
         epoch: "test".into(),
         fingerprint: "test".into(),

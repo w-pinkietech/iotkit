@@ -425,7 +425,7 @@ fn online_manifest_uses_only_sanitized_snapshot_facts() {
     assert_eq!(artifact.manifest.artifact_kind, "iotkit-node-backup");
     assert_eq!(artifact.manifest.backup_id, "node-backup-test");
     assert_eq!(artifact.manifest.created_at_ms, 1_725_000_000_000);
-    assert_eq!(artifact.manifest.schema_version, 24);
+    assert_eq!(artifact.manifest.schema_version, 25);
     assert_eq!(artifact.manifest.snapshot_mode, SnapshotMode::Online);
     assert!(artifact.manifest.shutdown_seal_id.is_none());
     assert_eq!(

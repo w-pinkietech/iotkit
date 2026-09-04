@@ -65,7 +65,7 @@ fn legacy_snapshot_export_refuses_device_credentials_without_secret_or_hash_leak
 }
 
 #[test]
-fn subprocess_init_v24_snapshot_export_restore_and_status_regression() {
+fn subprocess_init_current_schema_snapshot_export_restore_and_status_regression() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.db");
     let target = dir.path().join("target.db");
@@ -84,8 +84,8 @@ fn subprocess_init_v24_snapshot_export_restore_and_status_regression() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert!(
-        versions.contains(&24),
-        "init must apply current migration v24"
+        versions.contains(&25),
+        "init must apply the current migration set (pipeline v25)"
     );
     drop(source_conn);
 
@@ -122,7 +122,10 @@ fn subprocess_init_v24_snapshot_export_restore_and_status_regression() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(target_max, 24, "snapshot restore target must remain v24");
+    assert_eq!(
+        target_max, 25,
+        "snapshot restore target must remain on the current schema"
+    );
 }
 
 #[test]
@@ -1869,7 +1872,7 @@ fn existing_empty_db_gets_edge_migration_version_set() {
     assert_eq!(
         versions,
         vec![
-            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+            1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
         ]
     );
     let edge_node_id: String = conn
@@ -3952,4 +3955,142 @@ fn snapshot_restore_rejects_unknown_columns_before_insert() {
             Ok(())
         })
         .unwrap();
+}
+
+// ── pipeline commands (#232 child issue 3) ────────────────
+
+#[test]
+fn pipeline_cli_lists_exports_imports_and_resets_through_typed_operations() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("pipelines.db");
+    assert_success(run(&["--db", db_path.to_str().unwrap(), "init"]));
+
+    // Before the node ever started with this database, mutations are refused.
+    let refused = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "reset",
+        "press-01",
+    ]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("edge-node-id"));
+
+    let engine = iotkit_core_pipeline::PipelineEngine::new("rpi1".parse().unwrap());
+    let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
+    db.with_conn_sync(|conn| {
+        engine
+            .reconcile(conn, iotkit_core_pipeline::InputTime::now(None))
+            .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    drop(db);
+
+    let listed = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "list",
+    ]));
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed).unwrap(),
+        Value::Array(vec![])
+    );
+
+    let import_file = dir.path().join("import.toml");
+    std::fs::write(
+        &import_file,
+        r#"
+[[pipeline]]
+id = "press-01-cycle-count"
+kind = "accumulated-count"
+trigger = "on-transition"
+
+[pipeline.input]
+adapter = "trial_sample"
+measurement_key = "contact_state"
+
+[pipeline.detector]
+mode = "high-active"
+rise_threshold = 0.5
+fall_threshold = 0.5
+"#,
+    )
+    .unwrap();
+
+    let unconfirmed = run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "import",
+        import_file.to_str().unwrap(),
+    ]);
+    assert!(!unconfirmed.status.success());
+    assert!(String::from_utf8_lossy(&unconfirmed.stderr).contains("--replace-all"));
+
+    let imported = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "import",
+        import_file.to_str().unwrap(),
+        "--replace-all",
+    ]));
+    let imported: Value = serde_json::from_str(&imported).unwrap();
+    assert_eq!(imported["imported"], 1);
+    let first_series = imported["series"][0]["series_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let exported = dir.path().join("pipelines.toml");
+    assert!(
+        exported.exists(),
+        "import writes the backup next to the database"
+    );
+    let backup = std::fs::read_to_string(&exported).unwrap();
+    assert!(backup.contains("id = \"press-01-cycle-count\""));
+
+    let reset = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "reset",
+        "press-01-cycle-count",
+    ]));
+    let reset: Value = serde_json::from_str(&reset).unwrap();
+    assert_ne!(reset["series_id"].as_str().unwrap(), first_series);
+    assert_eq!(reset["published_sequence"], 1);
+
+    let elsewhere = dir.path().join("copy.toml");
+    assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "export",
+        "--export-path",
+        elsewhere.to_str().unwrap(),
+    ]));
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), backup);
+
+    let listed = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "list",
+    ]));
+    let listed: Value = serde_json::from_str(&listed).unwrap();
+    assert_eq!(listed[0]["id"], "press-01-cycle-count");
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let outbox: i64 = conn
+        .query_row("SELECT COUNT(*) FROM observation_outbox", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        outbox, 2,
+        "import and reset each published sequence 1 value 0"
+    );
 }

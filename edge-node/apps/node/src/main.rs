@@ -354,11 +354,68 @@ async fn run(
 
     // Ingest collector: fan-inループのSensorData分岐が経由する耐久点(D1)。
     // 受理判定はD6判別表(SqliteRegistry=現場レジストリ参照、計画2)。
+    // Device-local pipelines (#232): reconcile series against the stored
+    // definitions before any reading is accepted, then deliver every durable
+    // reading inside the collector's transaction.
+    let pipeline_engine = iotkit_core_pipeline::PipelineEngine::new(config.edge_node_id.clone());
+    {
+        let engine = pipeline_engine.clone();
+        // The startup reconciliation has no clock-trust evidence yet, so a
+        // series it starts publishes without a wall-clock time.
+        let now = iotkit_core_pipeline::InputTime::now(None);
+        let started = db
+            .with_conn(move |conn| {
+                let tx = rusqlite::Transaction::new_unchecked(
+                    conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )?;
+                Ok(match engine.reconcile(&tx, now) {
+                    Ok(started) => tx
+                        .commit()
+                        .map(|()| started)
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error.to_string()),
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
+        match started {
+            Ok(started) => {
+                for start in &started {
+                    tracing::info!(
+                        pipeline = %start.pipeline_id,
+                        series_id = %start.series_id,
+                        published_zero = start.published.is_some(),
+                        "pipeline started a new series"
+                    );
+                }
+                tracing::info!(
+                    new_series = started.len(),
+                    export_path = %config.pipelines.export_path.display(),
+                    "pipelines reconciled"
+                );
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "failed to reconcile pipeline series");
+                return false;
+            }
+        }
+    }
+    let mut pipeline_delivery = iotkit_core_collector::PipelineDelivery::new(
+        pipeline_engine,
+        iotkit_core_pipeline::PipelineFaults::default(),
+    );
+    for instance in &config.adapter_instances {
+        pipeline_delivery
+            .register_adapter(instance.source().as_str(), instance.instance_id().as_str());
+    }
     let (collector, principal_issuer, device_issuer, _collector_handle) =
         iotkit_core_collector::Collector::spawn_fully_composed(
             db.clone(),
             std::sync::Arc::new(iotkit_core_registry::SqliteRegistry),
             256,
+            Some(std::sync::Arc::new(pipeline_delivery)),
         );
     health_state
         .lock()
