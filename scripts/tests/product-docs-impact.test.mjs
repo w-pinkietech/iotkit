@@ -50,53 +50,46 @@ test("input adapter and driver paths select input-adapter contract", () => {
   );
 });
 
-test("custody paths select custody contract and architecture", () => {
+test("core paths select the architecture document", () => {
   const result = selectImpact(rules, [
     "edge-node/core/ledger/src/lib.rs",
-    "edge/src/mqtt/ingest/runtime.rs",
+    "edge-node/apps/nodectl/src/main.rs",
   ]);
   const docs = result.candidates.map((c) => c.docPath).sort();
-  assert.ok(docs.includes("contracts/edge-node-custody-v1.md"));
   assert.ok(docs.includes("architecture/system-overview.md"));
-});
-
-test("output adapter package paths select output-adapter contract", () => {
-  const result = selectImpact(rules, [
-    "edge/output-adapters/generic-mqtt-json-v1/src/lib.rs",
-    "edge/src/mqtt/output/runtime.rs",
-  ]);
   assert.ok(
-    result.candidates.some((c) => c.docPath === "contracts/output-adapter-v1.md"),
-  );
-  assert.equal(
-    result.candidates.find((c) => c.docPath === "contracts/output-adapter-v1.md")
-      .ruleIds.includes("output-adapter-contract"),
-    true,
+    result.candidates
+      .find((c) => c.docPath === "architecture/system-overview.md")
+      .ruleIds.includes("edge-node-core"),
   );
 });
 
-test("semantic_output storage also hits storage-capacity (coarse lower bound)", () => {
+test("MQTT Output Adapter paths select the contract and the product model", () => {
   const result = selectImpact(rules, [
-    "edge/src/storage/semantic_output/operations.rs",
+    "edge-node/apps/node/src/output_mqtt.rs",
+    "testdata/observation/v1/status-online.json",
   ]);
+  const docs = result.candidates.map((c) => c.docPath).sort();
+  assert.ok(docs.includes("contracts/mqtt-output-adapter-v1.md"));
+  assert.ok(docs.includes("concepts/product-model.md"));
+  assert.ok(
+    result.candidates
+      .find((c) => c.docPath === "contracts/mqtt-output-adapter-v1.md")
+      .ruleIds.includes("mqtt-output-adapter"),
+  );
+});
+
+test("pipeline core paths also hit storage-capacity (coarse lower bound)", () => {
+  const result = selectImpact(rules, ["edge-node/core/pipeline/src/outbox.rs"]);
   const docs = result.candidates.map((c) => c.docPath);
-  assert.ok(docs.includes("contracts/output-adapter-v1.md"));
+  assert.ok(docs.includes("contracts/mqtt-output-adapter-v1.md"));
   assert.ok(docs.includes("operations/storage-capacity.md"));
 });
 
-test("console frontend paths select architecture and installation ops", () => {
-  const result = selectImpact(rules, ["edge/frontend/src/navigation.ts"]);
-  const docs = result.candidates.map((c) => c.docPath).sort();
-  assert.deepEqual(docs, [
-    "architecture/system-overview.md",
-    "operations/installation-and-recovery.md",
-  ]);
-});
-
-test("backup and deploy paths select recovery operations docs", () => {
+test("recovery and deploy paths select recovery operations docs", () => {
   const result = selectImpact(rules, [
-    "edge/src/backup/mod.rs",
-    "deploy/edge/Dockerfile",
+    "edge-node/core/recovery/src/lib.rs",
+    "deploy/systemd/iotkit-edge-node-backup.service",
   ]);
   const docs = result.candidates.map((c) => c.docPath).sort();
   assert.ok(docs.includes("operations/installation-and-recovery.md"));

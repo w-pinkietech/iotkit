@@ -10,9 +10,7 @@
     {
       "id": "product-model",
       "path_prefixes": [
-        "edge-node/apps/",
-        "edge/src/composition/",
-        "edge/src/config/"
+        "edge-node/apps/"
       ],
       "doc_paths": [
         "concepts/product-model.md",
@@ -55,30 +53,26 @@
       "rationale": "Input Adapter host, sensor drivers, or polling runtime."
     },
     {
-      "id": "edge-node-custody",
+      "id": "edge-node-core",
       "path_prefixes": [
         "edge-node/core/",
         "edge-node/apps/node/",
-        "edge-node/apps/nodectl/",
-        "edge/custody-contract/",
-        "edge/src/mqtt/ingest/"
+        "edge-node/apps/nodectl/"
       ],
       "doc_paths": [
-        "contracts/edge-node-custody-v1.md",
         "architecture/system-overview.md"
       ],
-      "rationale": "Edge Node durable delivery, ledger, publish, or Edge-side custody intake."
+      "rationale": "Edge Node core, node, or CLI changed; the architecture crate map or component responsibilities may need the same change."
     },
     {
       "id": "edge-node-recovery",
       "path_prefixes": [
-        "scripts/add-edge-node.sh",
-        "scripts/bootstrap-edge.sh",
+        "edge-node/core/recovery/",
         "scripts/fence-edge-node.sh",
         "scripts/upgrade-edge-node-recovery-acl.sh",
         "scripts/test-edge-node-fence.sh",
         "scripts/test-edge-node-recovery-acl.sh",
-        "scripts/test-edge-bootstrap.sh"
+        "deploy/systemd/"
       ],
       "doc_paths": [
         "contracts/edge-node-recovery-v1.md",
@@ -86,20 +80,6 @@
         "operations/installation-and-recovery.md"
       ],
       "rationale": "Edge Node replacement, fence, bootstrap, or recovery ACL tooling."
-    },
-    {
-      "id": "output-adapter-contract",
-      "path_prefixes": [
-        "edge/output-adapters/",
-        "edge/src/application/output_profiles.rs",
-        "edge/src/mqtt/output/",
-        "edge/src/storage/semantic_output/",
-        "edge/src/semantics/"
-      ],
-      "doc_paths": [
-        "contracts/output-adapter-v1.md"
-      ],
-      "rationale": "Output Adapter packages, meanings, semantic history, or external publish path."
     },
     {
       "id": "mqtt-output-adapter-contract",
@@ -157,55 +137,22 @@
       "rationale": "Edge Node TOML tables, defaults, or identifier rules changed; the configuration ownership section and the identifier constraints may need the same change."
     },
     {
-      "id": "console-and-edge-surface",
-      "path_prefixes": [
-        "edge/frontend/",
-        "edge/src/web/",
-        "edge/openapi/"
-      ],
-      "doc_paths": [
-        "architecture/system-overview.md",
-        "operations/installation-and-recovery.md"
-      ],
-      "rationale": "Console HTML/browser surface, Edge HTTP API, or OpenAPI representation."
-    },
-    {
-      "id": "accounts-auth",
-      "path_prefixes": [
-        "edge/src/auth/",
-        "edge/src/application/accounts.rs",
-        "edge/src/application/authorization.rs",
-        "edge/src/storage/auth.rs"
-      ],
-      "doc_paths": [
-        "operations/installation-and-recovery.md",
-        "architecture/system-overview.md"
-      ],
-      "rationale": "Accounts, sessions, CSRF, authorization, or operator recovery of access."
-    },
-    {
       "id": "backup-restore-ops",
       "path_prefixes": [
-        "edge/src/backup/",
-        "edge/src/cli/",
-        "edge/migrations/",
         "deploy/"
       ],
       "doc_paths": [
-        "operations/installation-and-recovery.md",
-        "operations/edge-node-hardware-recovery.md"
+        "operations/installation-and-recovery.md"
       ],
-      "rationale": "Backup, restore, CLI operator paths, migrations, or deployment packaging."
+      "rationale": "Deployment assets changed; the installation runbook may need the same change."
     },
     {
       "id": "storage-capacity",
       "path_prefixes": [
-        "edge/src/storage/",
-        "edge/src/diagnostics/",
-        "scripts/test-edge-capacity.sh",
-        "scripts/test-edge-postgres.sh"
+        "edge-node/apps/node/src/retention.rs",
+        "edge-node/core/timeseries/"
       ],
-      "notes": "Also matches edge/src/storage/semantic_output/ (overlap with output-adapter is intentional lower-bound).",
+      "notes": "Retention and the readings store are deleted in #250 5b; the device-side outbox estimate stays under pipeline-core.",
       "doc_paths": [
         "operations/storage-capacity.md",
         "architecture/system-overview.md"
@@ -217,7 +164,8 @@
       "path_prefixes": [
         "scripts/iotkit",
         "scripts/iotkit_trial.py",
-        "scripts/test-iotkit-trial.sh"
+        "deploy/compose.trial.yaml",
+        "edge-node/Dockerfile"
       ],
       "doc_paths": [
         "operations/trial-profile.md"
@@ -231,7 +179,9 @@
       ],
       "doc_paths": [],
       "rationale": "Product corpus already in the diff; still confirm bilingual pairs and revision bumps.",
-      "flags": ["corpus_touched"]
+      "flags": [
+        "corpus_touched"
+      ]
     },
     {
       "id": "product-docs-gate",

@@ -23,23 +23,23 @@ test("storage changes select power-loss, pressure, and replacement questions", (
   assert.deepEqual(result.unmatchedPaths, []);
 });
 
-test("MQTT output changes select the reproduced convergence question", () => {
+test("MQTT Output Adapter changes select convergence and diagnosis questions", () => {
   const result = selectEntries(catalog, [
-    "edge/src/mqtt/output/runtime.rs",
+    "edge-node/apps/node/src/output_mqtt.rs",
+  ]);
+  assert.deepEqual(
+    result.selections.map(({ entry }) => entry.id),
+    ["BT-001", "BT-005"],
+  );
+});
+
+test("outbox changes select the convergence question", () => {
+  const result = selectEntries(catalog, [
+    "edge-node/core/pipeline/src/outbox.rs",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),
     ["BT-001"],
-  );
-});
-
-test("durable output changes select convergence, storage, and diagnosis questions", () => {
-  const result = selectEntries(catalog, [
-    "edge/src/storage/semantic_output/operations.rs",
-  ]);
-  assert.deepEqual(
-    result.selections.map(({ entry }) => entry.id),
-    ["BT-001", "BT-002", "BT-003", "BT-005"],
   );
 });
 
@@ -53,9 +53,9 @@ test("HTTP admission changes select storage pressure acknowledgement review", ()
   );
 });
 
-test("Console changes select only the operator diagnosis question", () => {
+test("device fault changes select only the operator diagnosis question", () => {
   const result = selectEntries(catalog, [
-    "edge/frontend/src/navigation.ts",
+    "edge-node/core/pipeline/src/faults.rs",
   ]);
   assert.deepEqual(
     result.selections.map(({ entry }) => entry.id),

@@ -10,17 +10,11 @@ const COMPATIBILITY_MANIFEST_PATH = "testdata/compatibility/v1/release-manifest.
 
 export const REQUIRED_COMPATIBILITY_DOMAINS = [
   "http-ingest-v1",
-  "edge-node-custody-v1",
-  "console-json-v1",
   "input-adapter-v1",
-  "output-adapter-v1",
+  "mqtt-output-adapter-v1",
 ];
 
-export const REQUIRED_STORAGE_SCHEMAS = [
-  "edge-node-sqlite",
-  "iotkit-edge-sqlite",
-  "iotkit-edge-postgres",
-];
+export const REQUIRED_STORAGE_SCHEMAS = ["edge-node-sqlite"];
 
 const MANIFEST_KEYS = ["schema_version", "domains", "storage"];
 const DOMAIN_KEYS = ["id", "authority", "types", "schemas", "fixtures", "tests"];

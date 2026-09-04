@@ -22,20 +22,17 @@
       "id": "BT-001",
       "title": "Custody converges after Broker or network interruption",
       "evidence_level": "reproduced",
-      "concerns": ["custody", "network-recovery", "external-output"],
+      "concerns": [
+        "custody",
+        "network-recovery",
+        "external-output"
+      ],
       "path_prefixes": [
         "edge-node/core/publish/",
         "edge-node/core/pipeline/src/outbox.rs",
         "edge-node/apps/node/src/output_mqtt.rs",
         "edge-node/apps/node/src/publish_task.rs",
         "edge-node/apps/node/src/retention.rs",
-        "edge/src/mqtt/",
-        "edge/src/application/output_profiles.rs",
-        "edge/src/storage/semantic_output.rs",
-        "edge/src/storage/semantic_output/",
-        "edge/output-adapters/",
-        "scripts/test-edge-output.sh",
-        "scripts/test-edge-resilience.sh",
         "scripts/test-journey.sh"
       ],
       "review_question": "After disconnect, restart, duplicate delivery, or delayed acknowledgement, do the Edge Node raw cursor and IoTKit Edge output outbox converge without silent loss or identity changes? For the redesigned MQTT Output Adapter: does the observation outbox converge to PUBACK-acknowledged with the series and sequence intact, and at most one duplicate of the in-flight publication?",
@@ -43,22 +40,23 @@
         "docs/redesign/decisions/D3-process-and-wave-decisions.md"
       ],
       "guards": [
-        "scripts/test-edge-output.sh",
-        "scripts/test-edge-resilience.sh",
         "scripts/test-journey.sh"
       ],
-      "coverage_gap": "The existing gates exercise process and Broker outages, not every factory router, Wi-Fi, DNS, or long-partition behavior."
+      "coverage_gap": "The journey exercises a Broker outage and a process restart on one host, not every factory router, Wi-Fi, DNS, or long-partition behavior."
     },
     {
       "id": "BT-002",
       "title": "Abrupt host power loss preserves committed state",
       "evidence_level": "hypothesis",
-      "concerns": ["custody", "power-loss", "storage"],
+      "concerns": [
+        "custody",
+        "power-loss",
+        "storage"
+      ],
       "path_prefixes": [
         "edge-node/core/storage/",
         "edge-node/core/ledger/",
         "edge-node/core/publish/",
-        "edge/src/storage/",
         "deploy/"
       ],
       "review_question": "Does an abrupt Edge Node or IoTKit Edge host power loss preserve the last committed custody boundary and restart without acknowledging uncommitted data?",
@@ -66,16 +64,18 @@
         "docs/product/ja/operations/installation-and-recovery.md",
         "docs/product/en/operations/installation-and-recovery.md"
       ],
-      "guards": [
-        "scripts/test-edge-resilience.sh"
-      ],
+      "guards": [],
       "coverage_gap": "Process restart coverage is not evidence of physical power-cut, filesystem, SD-card, or storage-controller durability."
     },
     {
       "id": "BT-003",
       "title": "Storage pressure never becomes a successful acknowledgement",
       "evidence_level": "reproduced",
-      "concerns": ["custody", "storage-pressure", "storage"],
+      "concerns": [
+        "custody",
+        "storage-pressure",
+        "storage"
+      ],
       "path_prefixes": [
         "edge-node/core/storage/",
         "edge-node/core/timeseries/",
@@ -83,25 +83,27 @@
         "edge-node/ingest/http/src/admission.rs",
         "edge-node/ingest/http/src/routes.rs",
         "edge-node/ingest/http/src/transition.rs",
-        "edge/src/storage/",
-        "edge/src/diagnostics/",
-        "scripts/test-edge-capacity.sh"
+        "scripts/test-journey.sh"
       ],
-      "review_question": "When a write, commit, or allocation fails because storage is full or unavailable, does the system retain retry authority, avoid a terminal success, and show an actionable capacity state?",
+      "review_question": "When a write, commit, or allocation fails because storage is full or unavailable, does the system retain retry authority, avoid a terminal success, and report the state (status `degraded` with `storage-write-failed`, then `online` once a write succeeds)?",
       "provenance": [
         "docs/product/ja/operations/storage-capacity.md",
         "docs/product/en/operations/storage-capacity.md"
       ],
       "guards": [
-        "scripts/test-edge-capacity.sh"
+        "scripts/test-journey.sh"
       ],
-      "coverage_gap": "Capacity smoke measurements do not by themselves prove disk-full behavior at every transaction boundary."
+      "coverage_gap": "The journey injects a failing write with a SQLite trigger; it does not prove disk-full behavior at every transaction boundary."
     },
     {
       "id": "BT-004",
       "title": "Edge Node computer replacement has an explicit loss boundary",
       "evidence_level": "reproduced",
-      "concerns": ["custody", "edge-node-replacement", "restore"],
+      "concerns": [
+        "custody",
+        "edge-node-replacement",
+        "restore"
+      ],
       "path_prefixes": [
         "edge-node/core/ledger/",
         "edge-node/core/recovery/",
@@ -111,26 +113,16 @@
         "edge-node/apps/node/src/record.rs",
         "edge-node/apps/node/tests/recovery_startup.rs",
         "edge-node/apps/nodectl/",
-        "edge/src/storage/activation.rs",
-        "edge/src/storage/recovery_activation.rs",
-        "edge/src/application/recovery.rs",
-        "edge/src/backup/",
-        "edge/tests/profile_contract.rs",
         "docs/product/en/operations/edge-node-hardware-recovery.md",
-        "docs/product/ja/operations/edge-node-hardware-recovery.md",
-        "scripts/test-edge-bootstrap.sh"
+        "docs/product/ja/operations/edge-node-hardware-recovery.md"
       ],
       "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
       "provenance": [
-        "docs/product/ja/contracts/edge-node-custody-v1.md",
-        "docs/product/en/contracts/edge-node-custody-v1.md",
         "docs/product/ja/operations/installation-and-recovery.md",
         "docs/product/en/operations/installation-and-recovery.md"
       ],
       "guards": [
         "edge-node/apps/node/tests/recovery_startup.rs",
-        "edge/tests/profile_contract.rs",
-        "scripts/test-edge-bootstrap.sh",
         "docs/product/ja/operations/edge-node-hardware-recovery.md",
         "docs/product/en/operations/edge-node-hardware-recovery.md",
         "docs/product/ja/operations/installation-and-recovery.md",
@@ -142,32 +134,26 @@
       "id": "BT-005",
       "title": "A non-IT operator can identify the stopped layer",
       "evidence_level": "hypothesis",
-      "concerns": ["diagnostics", "operability"],
-      "path_prefixes": [
-        "edge/src/web/",
-        "edge/frontend/",
-        "edge/src/storage/",
-    "edge/src/diagnostics/",
-    "edge-node/apps/node/src/health.rs",
-    "edge-node/apps/node/src/output_mqtt.rs",
-    "edge-node/apps/node/src/supervision.rs",
-    "edge/tests/diagnostics_contract.rs",
-    "edge/tests/console_contract.rs",
-    "scripts/test-edge-console-e2e.sh",
-    "scripts/test-edge-resilience.sh"
+      "concerns": [
+        "diagnostics",
+        "operability"
       ],
-      "review_question": "Can the Console and local diagnostics distinguish a stale sensor, stopped Input Adapter, stopped Edge Node, Broker path failure, IoTKit Edge ingestion failure, and blocked external output without guessing that the system is healthy?",
+      "path_prefixes": [
+        "edge-node/apps/node/src/health.rs",
+        "edge-node/apps/node/src/output_mqtt.rs",
+        "edge-node/apps/node/src/supervision.rs",
+        "edge-node/core/pipeline/src/faults.rs",
+        "scripts/test-journey.sh"
+      ],
+      "review_question": "Can the status topic (`faults`, `degraded`, Will) and, once it exists, the Console distinguish a stale sensor, a stopped Input Adapter, a stopped Edge Node, and a Broker path failure without guessing that the system is healthy?",
       "provenance": [
         "docs/product/ja/operations/installation-and-recovery.md",
         "docs/product/en/operations/installation-and-recovery.md"
       ],
-  "guards": [
-    "edge/tests/diagnostics_contract.rs",
-    "edge/tests/console_contract.rs",
-    "scripts/test-edge-console-e2e.sh",
-    "scripts/test-edge-resilience.sh"
-  ],
-  "coverage_gap": "Automated causal-state and browser checks do not prove that an operator unfamiliar with IoTKit can follow the first-action guidance during a physical sensor, host, or network incident."
+      "guards": [
+        "scripts/test-journey.sh"
+      ],
+      "coverage_gap": "The journey checks the status topic at a consumer; nothing yet proves that an operator unfamiliar with IoTKit can follow first-action guidance during a physical sensor, host, or network incident (Console arrives with #232 child issue 6)."
     }
   ]
 }

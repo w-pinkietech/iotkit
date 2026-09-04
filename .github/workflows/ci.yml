@@ -63,9 +63,6 @@ jobs:
       - name: Trial profile configuration contract
         run: python3 -m unittest scripts.tests.test_iotkit_trial
 
-      - name: Adapter author documentation API guard
-        run: node --test scripts/tests/adapter-author-docs.test.mjs
-
       - name: Layer rules
         run: scripts/check-layers
 
