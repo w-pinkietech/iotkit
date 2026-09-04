@@ -5,7 +5,7 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 20
+revision: 21
 ---
 
 # Architecture
@@ -377,7 +377,8 @@ below mechanically (in `verify.sh` and CI).
 | `iotkit-core-ledger` | `edge-node/core/ledger` | Device ledger: `system_id` issuance, series identity, sightings, epochs, audit events. |
 | `iotkit-core-timeseries` | `edge-node/core/timeseries` | `readings` + staged readings persistence, event-time derivation, queries. |
 | `iotkit-core-publish` | `edge-node/core/publish` | Exit-contract data layer: Edge Node activation admission, `publication_log` (outbox), `target_registry`, cursors. |
-| `iotkit-core-collector` | `edge-node/core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue. Owns the `RegistryPolicy` trait. |
+| `iotkit-core-collector` | `edge-node/core/collector` | Ingest actor: dedup, series resolution, quarantine and activation admission, active-record same-tx outbox enqueue, hand-off to device-local pipelines. Owns the `RegistryPolicy` trait. |
+| `iotkit-core-pipeline` | `edge-node/core/pipeline` | Device-local pipelines ([#232](https://github.com/w-pinkietech/iotkit/issues/232)): definitions, evaluator, series and sequence, Observation wire form, observation outbox, `pipelines.toml` export and import. |
 | `iotkit-core-registry` | `edge-node/core/registry` | D6 measurement registry (standard catalog + deployment overrides); implements `RegistryPolicy`. |
 | `iotkit-core-ops` | `edge-node/core/ops` | R14 operation catalog, permission tiers, auth store (passphrase/tokens), dispatch + audit. |
 | `iotkit-core-recovery` | `edge-node/core/recovery` | Optional Edge Node backup/recovery durable state, complete migration set, read-only startup fence probe, and recovery-model redaction boundary. |

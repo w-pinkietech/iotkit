@@ -5,7 +5,7 @@ description: "Defines a repeatable capacity regression smoke for embedded SQLite
 language: en
 translation_key: operations.storage-capacity
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit Edge storage capacity regression smoke
@@ -58,3 +58,14 @@ This short smoke detects regressions; it does not prove production sizing or a s
 - restart time and cursor/hash consistency after forced termination.
 
 If a deployment exceeds the measured SQLite envelope, stop and migrate the same IoTKit Edge to the PostgreSQL profile. Never make SQLite and PostgreSQL simultaneous authorities or dual-store raw data in TimescaleDB.
+
+## Device-side outbox (device-local redesign)
+
+After the redesign in [#232](https://github.com/w-pinkietech/iotkit/issues/232), the only thing that can keep growing in the device's SQLite is the outbox of unsent publications. Time series are not stored on the device.
+
+- One row is about 200 bytes (topic, payload, a little metadata).
+- `accumulated-count` and `state` publish only on change. `measurement` publishes only when the calibrated value changes, so its worst case equals the input rate.
+- Example: one `measurement` pipeline fed every second with a value that always changes grows by about 86,400 rows, roughly 17 MB, per day while the Broker is down. At 250 ms that is about 70 MB per day.
+- While the Broker is reachable, each PUBACK deletes a row, so the steady-state outbox stays at a few rows.
+
+The first version has no outbox size limit or thinning. On sites where Broker outages last long, compare the free disk space with the input rate of `measurement` pipelines and lower the rate if needed.

@@ -115,6 +115,21 @@
       "rationale": "MQTT Output Adapter v1 schema, fixtures, or conformance checks changed; the contract document and the Observation model may need the same change."
     },
     {
+      "id": "pipeline-core",
+      "path_prefixes": [
+        "edge-node/core/pipeline/",
+        "edge-node/core/ops/src/ops/pipeline_ops.rs",
+        "edge-node/core/collector/src/pipelines.rs",
+        "edge-node/apps/nodectl/src/cmd/pipeline.rs"
+      ],
+      "doc_paths": [
+        "concepts/product-model.md",
+        "contracts/mqtt-output-adapter-v1.md",
+        "operations/storage-capacity.md"
+      ],
+      "rationale": "Pipeline definitions, evaluator semantics, series rules, publish rate, or outbox growth changed; the product model, the MQTT Output Adapter contract, and the capacity note may need the same change."
+    },
+    {
       "id": "edge-node-toml-config",
       "path_prefixes": [
         "edge-node/apps/node/src/config.rs",
