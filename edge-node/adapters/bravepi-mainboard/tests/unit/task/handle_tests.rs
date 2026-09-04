@@ -153,7 +153,8 @@ async fn host_stop_joins_runtime_and_reader_before_completion() {
         Arc::clone(&reader_joined),
     );
     let (context, _ingest_rx) = host_context();
-    let running = start_host_worker(context, worker);
+    let (runtime, running) = runtime_channels(context.instance_id.clone(), 64);
+    start_host_worker(context, worker, runtime);
 
     running.shutdown.request();
     let mut completion = Box::pin(running.completion.wait());
@@ -180,7 +181,8 @@ async fn runtime_panic_joins_reader_before_panic_completion() {
         Arc::clone(&reader_joined),
     );
     let (context, _ingest_rx) = host_context();
-    let running = start_host_worker(context, worker);
+    let (runtime, running) = runtime_channels(context.instance_id.clone(), 64);
+    start_host_worker(context, worker, runtime);
 
     let mut completion = Box::pin(running.completion.wait());
     wait_until_set(&runtime_joined).await;

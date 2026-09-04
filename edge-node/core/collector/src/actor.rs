@@ -105,12 +105,35 @@ impl Collector {
         DevicePrincipalIssuer,
         tokio::task::JoinHandle<()>,
     ) {
+        Self::spawn_fully_composed_with_clock(
+            db,
+            policy,
+            queue_cap,
+            Arc::new(UntrustedSystemClock),
+            pipelines,
+        )
+    }
+
+    /// `spawn_fully_composed` with the receiver-owned clock evidence supplied
+    /// by the composition root (the node's `ClockTrust`).
+    pub fn spawn_fully_composed_with_clock(
+        db: DbHandle,
+        policy: Arc<dyn RegistryPolicy>,
+        queue_cap: usize,
+        freshness_clock: Arc<dyn FreshnessClock>,
+        pipelines: Option<Arc<PipelineDelivery>>,
+    ) -> (
+        Collector,
+        LocalPrincipalIssuer,
+        DevicePrincipalIssuer,
+        tokio::task::JoinHandle<()>,
+    ) {
         let (collector, handle) = Self::spawn_with_components(
             db,
             policy,
             queue_cap,
             DEFAULT_PURGE_INTERVAL_MS,
-            Arc::new(UntrustedSystemClock),
+            freshness_clock,
             FreshnessLimits::default(),
             None,
             pipelines,

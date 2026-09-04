@@ -31,6 +31,17 @@ impl SerialTransport {
         Ok(Self { port })
     }
 
+    /// The I/O error kind behind an open failure, so callers can classify it
+    /// (missing device node, permission, busy) without depending on serialport.
+    pub fn open_error_kind(error: &serialport::Error) -> io::ErrorKind {
+        match error.kind() {
+            serialport::ErrorKind::NoDevice => io::ErrorKind::NotFound,
+            serialport::ErrorKind::Io(kind) => kind,
+            serialport::ErrorKind::InvalidInput => io::ErrorKind::InvalidInput,
+            serialport::ErrorKind::Unknown => io::ErrorKind::Other,
+        }
+    }
+
     /// Read bytes from the serial port. Returns number of bytes read.
     pub fn read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<usize> {
         self.port.set_timeout(timeout).map_err(io::Error::other)?;

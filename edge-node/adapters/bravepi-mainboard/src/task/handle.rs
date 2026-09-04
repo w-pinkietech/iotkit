@@ -127,7 +127,7 @@ pub fn start(
 ) -> Result<AdapterHandle, std::io::Error> {
     let runtime_handle = tokio::runtime::Handle::try_current().map_err(std::io::Error::other)?;
 
-    let source = serial_source::start(&port_path)?;
+    let source = serial_source::start(&port_path, None)?;
 
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
     let (command_tx, command_rx) = mpsc::channel::<AdapterCommand>(32);
@@ -174,10 +174,13 @@ struct RuntimeWorker {
 }
 
 impl RuntimeWorker {
-    fn start(port_path: &str) -> Result<Self, std::io::Error> {
+    fn start(
+        port_path: &str,
+        activity: Option<iotkit_input_adapter_host_api::ActivityReporter>,
+    ) -> Result<Self, std::io::Error> {
         let runtime_handle =
             tokio::runtime::Handle::try_current().map_err(std::io::Error::other)?;
-        let source = serial_source::start(port_path)?;
+        let source = serial_source::start(port_path, activity)?;
         let (event_tx, event_rx) = mpsc::channel(256);
         let (command_tx, command_rx) = mpsc::channel(32);
         let decoded_handle = runtime_handle.spawn(decoded_event_loop(
@@ -243,13 +246,19 @@ pub fn start_host(
     context: AdapterStartContext,
     port_path: String,
 ) -> Result<RunningInputAdapter, std::io::Error> {
-    let worker = RuntimeWorker::start(&port_path)?;
-    Ok(start_host_worker(context, worker))
+    let (runtime, running) = runtime_channels(context.instance_id.clone(), 64);
+    // The serial reader reports open failures and reconnects into the host's
+    // activity snapshot, which the node publishes as interface-open-failed.
+    let worker = RuntimeWorker::start(&port_path, Some(runtime.activity.clone()))?;
+    start_host_worker(context, worker, runtime);
+    Ok(running)
 }
 
-fn start_host_worker(context: AdapterStartContext, worker: RuntimeWorker) -> RunningInputAdapter {
-    let instance_id = context.instance_id.clone();
-    let (runtime, running) = runtime_channels(instance_id, 64);
+fn start_host_worker(
+    context: AdapterStartContext,
+    worker: RuntimeWorker,
+    runtime: iotkit_input_adapter_host_api::AdapterRuntimeEndpoint,
+) {
     let (mut event_rx, shutdown) = worker.into_parts();
     tokio::spawn(async move {
         let iotkit_input_adapter_host_api::AdapterRuntimeEndpoint {
@@ -337,7 +346,6 @@ fn start_host_worker(context: AdapterStartContext, worker: RuntimeWorker) -> Run
         };
         completion.complete(outcome);
     });
-    running
 }
 
 #[cfg(test)]

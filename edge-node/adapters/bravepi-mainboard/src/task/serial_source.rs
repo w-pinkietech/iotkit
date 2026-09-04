@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use iotkit_input_adapter_host_api::ActivityReporter;
 use rpi4b_transport::SerialTransport;
 use tokio::sync::mpsc;
 
@@ -34,18 +35,46 @@ const MAX_BACKOFF_SECS: u64 = 30;
 /// Reader thread を起動する。
 /// port open は thread 内で行い、失敗時は exponential backoff で retry する。
 /// start() 自体は thread spawn 失敗時のみ Err を返す。
-pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
+/// `activity` があれば、open の成否をホストの interface state として報告する。
+pub(crate) fn start(
+    port_path: &str,
+    activity: Option<ActivityReporter>,
+) -> Result<SerialSource, std::io::Error> {
     let (bytes_tx, bytes_rx) = mpsc::channel(64);
     let (write_tx, write_rx) = mpsc::channel::<Vec<u8>>(16);
     let owned_path = port_path.to_string();
     let thread_handle = std::thread::Builder::new()
         .name(format!("bravepi-serial-{}", port_path))
-        .spawn(move || serial_reader_thread(owned_path, bytes_tx, write_rx))?;
+        .spawn(move || {
+            serial_reader_thread(owned_path, bytes_tx, write_rx, InterfaceReport { activity })
+        })?;
     Ok(SerialSource {
         bytes_rx,
         write_tx,
         handle: SerialSourceHandle { thread_handle },
     })
+}
+
+/// Reports open results to the host's activity snapshot when one is attached.
+struct InterfaceReport {
+    activity: Option<ActivityReporter>,
+}
+
+impl InterfaceReport {
+    fn opened(&self) {
+        if let Some(activity) = &self.activity {
+            activity.interface_opened();
+        }
+    }
+
+    fn open_failed(&self, port_path: &str, error: &rpi4b_transport::serialport::Error) {
+        if let Some(activity) = &self.activity {
+            activity.interface_open_failed(
+                SerialTransport::open_error_kind(error),
+                format!("{port_path}: {error}"),
+            );
+        }
+    }
 }
 
 /// Initial connection with retry。1回目は即試行、以降は try_reconnect と同じ
@@ -54,13 +83,18 @@ pub(crate) fn start(port_path: &str) -> Result<SerialSource, std::io::Error> {
 fn connect_initial(
     port_path: &str,
     bytes_tx: &mpsc::Sender<Result<Vec<u8>, TransportError>>,
+    report: &InterfaceReport,
 ) -> Option<SerialTransport> {
     let config = serial_config();
 
     // First attempt without delay.
     match SerialTransport::open(port_path, &config) {
-        Ok(t) => return Some(t),
+        Ok(t) => {
+            report.opened();
+            return Some(t);
+        }
         Err(e) => {
+            report.open_failed(port_path, &e);
             tracing::warn!(
                 error = %e,
                 port = %port_path,
@@ -70,7 +104,7 @@ fn connect_initial(
     }
 
     let mut retry_count: u32 = 0;
-    match try_reconnect(port_path, &mut retry_count, bytes_tx) {
+    match try_reconnect(port_path, &mut retry_count, bytes_tx, report) {
         ReconnectResult::Connected(t) => Some(t),
         ReconnectResult::ChannelClosed => None,
         ReconnectResult::RetriesExhausted => {
@@ -96,6 +130,7 @@ fn try_reconnect(
     port_path: &str,
     retry_count: &mut u32,
     bytes_tx: &mpsc::Sender<Result<Vec<u8>, TransportError>>,
+    report: &InterfaceReport,
 ) -> ReconnectResult {
     loop {
         *retry_count += 1;
@@ -127,10 +162,12 @@ fn try_reconnect(
         match SerialTransport::open(port_path, &config) {
             Ok(new_transport) => {
                 tracing::info!(port = %port_path, "Serial reconnected");
+                report.opened();
                 *retry_count = 0;
                 return ReconnectResult::Connected(new_transport);
             }
             Err(open_err) => {
+                report.open_failed(port_path, &open_err);
                 tracing::warn!(
                     error = %open_err,
                     port = %port_path,
@@ -145,10 +182,11 @@ fn serial_reader_thread(
     port_path: String,
     bytes_tx: mpsc::Sender<Result<Vec<u8>, TransportError>>,
     mut write_rx: mpsc::Receiver<Vec<u8>>,
+    report: InterfaceReport,
 ) {
     tracing::info!(port = %port_path, "Serial reader thread started");
 
-    let Some(mut transport) = connect_initial(&port_path, &bytes_tx) else {
+    let Some(mut transport) = connect_initial(&port_path, &bytes_tx, &report) else {
         return;
     };
 
@@ -196,7 +234,7 @@ fn serial_reader_thread(
                 );
             }
             drop(transport);
-            match try_reconnect(&port_path, &mut retry_count, &bytes_tx) {
+            match try_reconnect(&port_path, &mut retry_count, &bytes_tx, &report) {
                 ReconnectResult::Connected(new_transport) => {
                     transport = new_transport;
                     continue;
@@ -227,7 +265,7 @@ fn serial_reader_thread(
             Err(e) => {
                 tracing::error!(error = %e, port = %port_path, "Serial read error");
                 drop(transport);
-                match try_reconnect(&port_path, &mut retry_count, &bytes_tx) {
+                match try_reconnect(&port_path, &mut retry_count, &bytes_tx, &report) {
                     ReconnectResult::Connected(new_transport) => {
                         transport = new_transport;
                         // continue to main loop

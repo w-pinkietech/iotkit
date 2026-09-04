@@ -399,11 +399,29 @@ fn sanitize_diagnostic_message(message: &str) -> String {
     bounded
 }
 
+/// Whether the adapter's hardware interface (serial, I2C, GPIO) is open. The
+/// host publishes `OpenFailed` as the `interface-open-failed` device fault and
+/// clears it on `Open`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum InterfaceState {
+    /// The adapter has not reported; also the state of adapters without a
+    /// hardware interface.
+    #[default]
+    Unreported,
+    Open,
+    OpenFailed {
+        kind: std::io::ErrorKind,
+        /// Bounded, secret-free text such as the device path and OS message.
+        detail: String,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ActivitySnapshot {
     pub last_physical_decode: Option<Instant>,
     pub last_queue_admission: Option<Instant>,
     pub dropped_diagnostics: u64,
+    pub interface: InterfaceState,
 }
 
 #[derive(Clone)]
@@ -429,6 +447,19 @@ impl ActivityReporter {
             .lock()
             .expect("activity lock poisoned")
             .last_queue_admission = Some(Instant::now());
+    }
+
+    /// The hardware interface is open (initially or after a reconnect).
+    pub fn interface_opened(&self) {
+        self.state.lock().expect("activity lock poisoned").interface = InterfaceState::Open;
+    }
+
+    /// Opening the hardware interface failed; the adapter keeps retrying.
+    pub fn interface_open_failed(&self, kind: std::io::ErrorKind, detail: impl Into<String>) {
+        self.state.lock().expect("activity lock poisoned").interface = InterfaceState::OpenFailed {
+            kind,
+            detail: sanitize_diagnostic_message(&detail.into()),
+        };
     }
 
     fn diagnostic_dropped(&self) {

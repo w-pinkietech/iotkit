@@ -219,9 +219,13 @@ pub fn start(
     // Ensure we are inside a Tokio runtime.
     let _handle = Handle::try_current().map_err(std::io::Error::other)?;
 
-    // Fail fast: verify the bus path is accessible.
+    // Fail fast: verify the bus path is accessible. The error kind is kept so
+    // the host can report interface-open-failed with the right reason.
     std::fs::File::open(&config.bus_path).map_err(|e| {
-        std::io::Error::other(format!("cannot open bus_path '{}': {}", config.bus_path, e))
+        std::io::Error::new(
+            e.kind(),
+            format!("cannot open bus_path '{}': {}", config.bus_path, e),
+        )
     })?;
 
     let (event_tx, event_rx) = mpsc::channel::<AdapterEvent>(256);
