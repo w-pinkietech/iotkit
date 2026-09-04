@@ -5,7 +5,7 @@ description: "Defines the topics, payloads, delivery, and consumer obligations w
 language: en
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 1
+revision: 2
 ---
 
 # IoTKit MQTT Output Adapter contract v1
@@ -86,7 +86,7 @@ Subscribing with one filter per kind gives each receive callback a fixed type. W
 |---|---|---|
 | `series_id` | string (1 to 64 bytes of UTF-8) | One continuous generation of the same pipeline output. An opaque string compared only for equality; consumers do not validate it as a UUID or check a version |
 | `sequence` | integer (1 to 2^53−1) | Starts at 1 within a series and increases by 1 per publication. Retransmissions reuse the value |
-| `uptime_ms` | integer (≥ 0) | Milliseconds from the start of the IoTKit process to the receipt of the input that settled this output, from a monotonic clock. Always present |
+| `uptime_ms` | integer (≥ 0) | Milliseconds from the boot of the device running IoTKit to the receipt of the input that settled this output, from a monotonic clock. Always present |
 | `unix_epoch_ms` | integer (Unix epoch ms) or `null` | The wall-clock time at which that input was received. An integer only while IoTKit can vouch for its clock; otherwise `null`. The key is always present |
 | `value` | by kind | See below |
 
@@ -108,14 +108,14 @@ IoTKit distinguishes a monotonic clock from the wall clock and promises only wha
 
 | | `uptime_ms` (monotonic) | `unix_epoch_ms` (wall clock) |
 |---|---|---|
-| Guaranteed | Monotonic and continuous within one process run. The difference between two Observations' `uptime_ms` equals the real time elapsed between them | When an integer, a wall-clock time IoTKit judged trustworthy (for example after NTP synchronization) |
-| Not guaranteed | Resets to zero when the process restarts. Not directly comparable with another device's or the consumer's clock | Stays `null` right after boot on devices without an RTC and on sites without NTP. May jump when synchronization happens |
+| Guaranteed | Monotonic and continuous while the device stays up; an IoTKit process restart does not break it. The difference between two Observations' `uptime_ms` equals the real time elapsed between them | When an integer, a wall-clock time IoTKit judged trustworthy (for example after NTP synchronization) |
+| Not guaranteed | Resets to zero when the device reboots. Not directly comparable with another device's or the consumer's clock | Stays `null` right after boot on devices without an RTC and on sites without NTP. May jump when synchronization happens |
 
 Consumers use them as follows.
 
 - Ordering and de-duplication use `sequence`, never a time.
-- The interval between two Observations (cycle time, length of a gap) is the difference of `uptime_ms` within the same run. A decrease relative to the previous Observation means IoTKit restarted; do not compute an interval across that boundary. A restart does not change the series.
-- Calendar placement uses `unix_epoch_ms`. When it is `null`, the consumer can build one anchor per run as "own receipt time of a live message minus its `uptime_ms`" and place every Observation of that run, including those buffered in the outbox during a Broker outage and delivered after reconnection. Observations buffered before a restart and delivered without wall-clock time keep their intervals but cannot be placed on the calendar.
+- The interval between two Observations (cycle time, length of a gap) is the difference of `uptime_ms` within the same boot. A decrease relative to the previous Observation means the device rebooted; do not compute an interval across that boundary. A reboot does not change the series.
+- Calendar placement uses `unix_epoch_ms`. When it is `null`, the consumer can build one anchor per boot as "own receipt time of a live message minus its `uptime_ms`" and place every Observation of that boot, including those buffered in the outbox during a Broker outage and delivered after reconnection. Observations buffered before a reboot and delivered without wall-clock time keep their intervals but cannot be placed on the calendar.
 - `null` is not an error. A change of `unix_epoch_ms` from `null` to an integer tells the consumer that the device clock became trustworthy.
 
 NTP synchronization is recommended and verified at installation where it is available. Interval measurement through `uptime_ms` holds on sites without it.

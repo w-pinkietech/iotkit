@@ -6,5 +6,5 @@
   "qos": 1,
   "retain": true,
   "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":44,\"uptime_ms\":8125456,\"unix_epoch_ms\":null,\"value\":23.75}",
-  "consumer_note": "Place it on the calendar with your own anchor: receipt time of a live message minus its uptime_ms, applied to every observation of the same run. Do not treat null as an error."
+  "consumer_note": "Place it on the calendar with your own anchor: receipt time of a live message minus its uptime_ms, applied to every observation of the same boot. Do not treat null as an error."
 }

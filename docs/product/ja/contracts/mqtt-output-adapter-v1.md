@@ -5,7 +5,7 @@ description: "IoTKit端末がObservationとstatusを標準MQTT Brokerへ公開�
 language: ja
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 1
+revision: 2
 ---
 
 # IoTKit MQTT Output Adapter契約 v1
@@ -86,7 +86,7 @@ kindごとに別のtopic filterで購読すれば、受信callbackごとに型�
 |---|---|---|
 | `series_id` | 文字列（UTF-8で1〜64バイト） | 同じpipeline出力の連続した世代。等価比較にだけ使う不透明な文字列で、UUIDであることやversionをconsumerは検証しない |
 | `sequence` | 整数（1以上、2^53−1以下） | series内で1から始まり、公開ごとに1増える。再送では増えない |
-| `uptime_ms` | 整数（0以上） | IoTKitプロセスの起動から、その出力を確定させた入力を受信するまでの経過ms。単調時計から取る。常に置く |
+| `uptime_ms` | 整数（0以上） | IoTKitが動く端末（OS）の起動から、その出力を確定させた入力を受信するまでの経過ms。単調時計から取る。常に置く |
 | `unix_epoch_ms` | 整数（Unix epoch ms）または`null` | その入力を受信した実時刻。IoTKitが自分の時計を信頼できるときだけ整数、それ以外は`null`。keyは常に置く |
 | `value` | kindによる | 下表 |
 
@@ -108,14 +108,14 @@ IoTKitは単調時計と実時計を区別し、それぞれが保証できる�
 
 | | `uptime_ms`（単調時計） | `unix_epoch_ms`（実時計） |
 |---|---|---|
-| 保証すること | 同じプロセス実行の中で単調かつ連続。2つのObservationの`uptime_ms`の差は、その間の実際の経過時間に等しい | 整数のときは、NTP同期などによりIoTKitが信頼できると判断した実時刻 |
-| 保証しないこと | プロセスの再起動でゼロに戻る。別の端末やconsumerの時計と直接は比べられない | RTCのない端末の起動直後や、NTPに届かない現場では`null`が続く。同期時に飛ぶことがある |
+| 保証すること | 端末が起動している間は単調かつ連続。IoTKitプロセスの再起動でも途切れない。2つのObservationの`uptime_ms`の差は、その間の実際の経過時間に等しい | 整数のときは、NTP同期などによりIoTKitが信頼できると判断した実時刻 |
+| 保証しないこと | 端末の再起動（reboot）でゼロに戻る。別の端末やconsumerの時計と直接は比べられない | RTCのない端末の起動直後や、NTPに届かない現場では`null`が続く。同期時に飛ぶことがある |
 
 consumerは次のように使う。
 
 - 順序の判定と重複排除は`sequence`。時刻は使わない。
-- 2つのObservationの間の幅（サイクル時間、欠測区間の長さ）は、同じ実行の中の`uptime_ms`の差。`uptime_ms`が前のObservationより減ったらIoTKitが再起動した合図であり、その境界を跨ぐ幅は計算しない。再起動はseriesを変えない。
-- カレンダーへの割り付けは`unix_epoch_ms`。`null`のときは、consumerが「届いたメッセージの自分の受信時刻 − その`uptime_ms`」で実行ごとの基準を1つ作れば、同じ実行のObservation（Broker停止中にoutboxへ溜まり、再接続後にまとめて届いたものを含む）を割り付けられる。再起動より前に溜まったObservationが実時計なしで届いた場合は、幅は分かるがカレンダーには置けない。
+- 2つのObservationの間の幅（サイクル時間、欠測区間の長さ）は、同じ起動の中の`uptime_ms`の差。`uptime_ms`が前のObservationより減ったら端末が再起動した合図であり、その境界を跨ぐ幅は計算しない。再起動はseriesを変えない。
+- カレンダーへの割り付けは`unix_epoch_ms`。`null`のときは、consumerが「届いたメッセージの自分の受信時刻 − その`uptime_ms`」で起動ごとの基準を1つ作れば、同じ起動のObservation（Broker停止中にoutboxへ溜まり、再接続後にまとめて届いたものを含む）を割り付けられる。端末の再起動より前に溜まったObservationが実時計なしで届いた場合は、幅は分かるがカレンダーには置けない。
 - `null`をエラーとして扱わない。`unix_epoch_ms`が`null`から整数に変わるのは、端末の時計が信頼できるようになったという情報である。
 
 端末はNTP同期を推奨し、同期できる現場では導入時に確認する。同期できない現場でも、`uptime_ms`による幅の計測は成り立つ。

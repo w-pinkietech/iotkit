@@ -34,7 +34,7 @@
       "maximum": 9007199254740991
     },
     "uptime_ms": {
-      "description": "Milliseconds since the IoTKit process started, taken from a monotonic clock. Always present. Monotonic within one process run; a decrease means IoTKit restarted. Use it for intervals and gap lengths, not for calendar placement.",
+      "description": "Milliseconds since the device booted, taken from a monotonic clock. Always present. Monotonic while the device stays up (an IoTKit process restart does not reset it); a decrease means the device rebooted. Use it for intervals and gap lengths, not for calendar placement.",
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991

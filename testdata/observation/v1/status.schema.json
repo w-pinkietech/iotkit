@@ -21,7 +21,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "Milliseconds since the IoTKit process started (monotonic clock)."
+          "description": "Milliseconds since the device booted (monotonic clock)."
         },
         "unix_epoch_ms": {
           "type": [
@@ -53,7 +53,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 9007199254740991,
-          "description": "Milliseconds since the IoTKit process started (monotonic clock)."
+          "description": "Milliseconds since the device booted (monotonic clock)."
         },
         "unix_epoch_ms": {
           "type": [
