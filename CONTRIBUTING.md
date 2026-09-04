@@ -56,9 +56,9 @@ install mise and configure shell activation or shims. Then run `mise install`
 from the repository root; direct `node`, `cargo`, and `npm` commands require
 that shell setup. CI uses the same `mise.toml` through `jdx/mise-action`.
 
-- Rust 1.95.0 with `rustfmt` and `clippy`;
-- Node.js 22 and npm for Console assets and tests;
-- Python 3.11 for trial scripts;
+- Rust 1.98.0 with `rustfmt` and `clippy`;
+- Node.js 24 and npm for Console assets and tests;
+- Python 3.14 for trial scripts;
 - `jq` 1.8.2 for trial validation and integration tests;
 - SQLite 3.53.4 for integration tests;
 - `cargo-nextest` 0.9.143 for Rust tests;

@@ -5,7 +5,7 @@ description: "Loopback限定のIoTKit試用profileを起動、確認、停止、
 language: ja
 translation_key: operations.trial-profile
 status: draft
-revision: 4
+revision: 5
 ---
 
 # このPCでIoTKitを試す
@@ -20,7 +20,7 @@ revision: 4
 
 ## 必要なもの
 
-- GitとPython 3.11以降を使用できる対応Linux host。
+- GitとPython 3.14以降を使用できる対応Linux host。
 - `docker compose` commandを含むDocker Engine。
 - local TCP port 8080と18883の空き。
 

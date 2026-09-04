@@ -207,7 +207,7 @@ async function launchBrowser() {
         );
         const targets = await response.json();
         return targets.find((candidate) => candidate.type === "page");
-      }, `${executable} DevTools page target`, 5_000);
+      }, `${executable} DevTools page target`);
       return { browser, debuggingPort, executable, profile, stderr: () => stderr, target };
     } catch (error) {
       if (browser.exitCode === null && browser.signalCode === null) {
