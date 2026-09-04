@@ -214,7 +214,7 @@ impl Collector {
                 let purge_after_success = commit;
                 let freshness_clock = Arc::clone(&freshness_clock);
                 let intrusion_tx = intrusion_tx.clone();
-                let pipelines = pipelines.clone();
+                let pipelines_in_tx = pipelines.clone();
                 let result = db
                     .with_conn(move |conn| {
                         let mut c = taken;
@@ -225,7 +225,7 @@ impl Collector {
                             freshness_clock.as_ref(),
                             freshness_limits,
                             intrusion_tx.as_ref(),
-                            pipelines.as_deref(),
+                            pipelines_in_tx.as_deref(),
                             &request,
                             commit,
                         );
@@ -242,6 +242,9 @@ impl Collector {
                             RequestedOutput::Validate(tx) => {
                                 let _ = tx.send(Ok(validation_report_from_ack(ack)));
                             }
+                        }
+                        if commit && let Some(pipelines) = &pipelines {
+                            pipelines.note_commit();
                         }
                         if purge_after_success {
                             // 計画4のTTL/保持ワイヤリング着地までの日和見パージ(受理トランザクション
@@ -280,6 +283,9 @@ impl Collector {
                     }
                     Ok((Err(ProcessError::Storage(e)), _c)) => {
                         tracing::error!(error = %e, "collector: storage failure (envelope aborted)");
+                        if commit && let Some(pipelines) = &pipelines {
+                            pipelines.note_storage_failure(&e.to_string());
+                        }
                         // ロールバックでキャッシュ済みseries_id(・devices)が無効化されうるため
                         // 全捨てが安全。process_itemはensure_seriesのINSERT直後(コミット前)に
                         // cache.seriesへ書くので、部分ロールバックされたcが持つseries_idはDBに
@@ -290,6 +296,9 @@ impl Collector {
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "collector: storage failure");
+                        if commit && let Some(pipelines) = &pipelines {
+                            pipelines.note_storage_failure(&e.to_string());
+                        }
                         // ack_tx をドロップ = 送信側はタイムアウトで再送(ackなし=未耐久、D1と整合)
                     }
                 }

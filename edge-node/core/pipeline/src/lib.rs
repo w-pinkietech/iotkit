@@ -19,6 +19,7 @@ pub mod evaluator;
 pub mod export;
 pub mod faults;
 pub mod outbox;
+pub mod status;
 pub mod store;
 pub mod wire;
 
@@ -35,8 +36,14 @@ pub use export::{
     DEFAULT_EXPORT_FILE_NAME, ExportError, ImportError, default_export_path, export_definitions,
     read_definitions,
 };
-pub use faults::{FaultRecord, PipelineFaults};
+pub use faults::{
+    DeviceFaultSnapshot, DeviceFaults, FaultRecord, InterfaceOpenFault, PipelineFaults,
+    StorageWriteFault,
+};
 pub use outbox::OutboxRow;
+pub use status::{
+    Fault, FaultKind, InterfaceOpenReason, Status, StatusValue, WILL_PAYLOAD, status_topic,
+};
 pub use store::{PipelineState, StoreError};
 pub use wire::{InputTime, Observation, ObservationValue, uptime_ms};
 
