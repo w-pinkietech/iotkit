@@ -5,7 +5,7 @@ description: "MQTTによるcustody移転と、分離したbounded Edge Node運�
 language: ja
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 11
+revision: 12
 ---
 
 # Edge Node保管責任契約 v1
@@ -231,7 +231,7 @@ IoTKit Edgeはcoalesceの前に保持するwire payloadを`AcceptedThrough`と�
 - Reconnect後はcurrent batchをretryする。restartで同じcursor startからより広いbatchをrebuildした場合、検証済みの過去prefix ackはそのprefixだけをadvanceし、残りrangeをrebuildする。
 - IoTKit Edge exact replayは既存rowを検証し、commit済みwatermarkを再publish。
 
-初期実装はoperator提供IP path上のMQTT/TLS、anonymous無効、Edge Node別static credential/topic ACLです。Local network、VPN、private route等を使えますが特定VPN製品を要求しません。SecretはGit、argv、log、Debug、audit detail、query outputへ出しません。Plain MQTTは`allow_insecure=true`を明示したlocal Docker testだけです。
+初期実装はoperator提供IP path上のMQTT/TLS、anonymous無効、Edge Node別static credential/topic ACLです。Local network、VPN、private route等を使えますが特定VPN製品を要求しません。Edge Nodeの設定は`[output.mqtt]`でBrokerとcredential fileを指定し、MQTT usernameは常にEdge Nodeが生成した`edge_node_id`です。SecretはGit、argv、log、Debug、audit detail、query outputへ出しません。Plain MQTTは`allow_insecure=true`を明示したlocal Docker testだけです。
 
 ## Pinikiet境界と延期項目
 

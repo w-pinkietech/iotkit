@@ -9,6 +9,7 @@ use serial_test::serial;
 fn parse_full_toml() {
     let toml_str = r#"
 [edge_node]
+id = "kitchen-edge"
 db_path = "test.db"
 
 [adapters.bravepi]
@@ -20,7 +21,7 @@ enabled = true
 bus_path = "/dev/i2c-3"
 poll_interval_ms = 500
 
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = "edge.internal"
 port = 8883
@@ -28,12 +29,20 @@ password_file = "/run/secrets/iotkit-mqtt-password"
 trust_mode = "bundle_only"
 ca_file = "/etc/iotkit/edge-ca.pem"
 
-[api]
-edge_node_name = "kitchen-edge"
+[status]
+heartbeat_interval = "30s"
+
+[pipelines]
+export_path = "/var/lib/iotkit/pipelines.toml"
 "#;
     let raw: RawConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(raw.edge_node.id.as_deref(), Some("kitchen-edge"));
     assert_eq!(raw.edge_node.db_path.as_deref(), Some("test.db"));
-    assert_eq!(raw.api.edge_node_name.as_deref(), Some("kitchen-edge"));
+    assert_eq!(raw.status.heartbeat_interval.as_deref(), Some("30s"));
+    assert_eq!(
+        raw.pipelines.export_path.as_deref(),
+        Some("/var/lib/iotkit/pipelines.toml")
+    );
     let bp = raw.adapters.bravepi.unwrap();
     assert_eq!(bp.enabled, Some(true));
     assert_eq!(bp.port.as_deref(), Some("/dev/ttyUSB0"));
@@ -41,7 +50,7 @@ edge_node_name = "kitchen-edge"
     assert_eq!(rpi.enabled, Some(true));
     assert_eq!(rpi.bus_path.as_deref(), Some("/dev/i2c-3"));
     assert_eq!(rpi.poll_interval_ms, Some(500));
-    let mqtt = raw.exit.mqtt.unwrap();
+    let mqtt = raw.output.mqtt.unwrap();
     assert_eq!(mqtt.host.as_deref(), Some("edge.internal"));
     assert_eq!(
         mqtt.password_file.as_deref(),
@@ -100,7 +109,11 @@ fn load_raw_missing_explicit_returns_error() {
 #[test]
 fn load_raw_valid_file() {
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-    write!(tmpfile, "[edge_node]\ndb_path = \"from-file.db\"").unwrap();
+    write!(
+        tmpfile,
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"from-file.db\""
+    )
+    .unwrap();
     let raw = load_raw(Some(tmpfile.path()), true).unwrap();
     assert_eq!(raw.edge_node.db_path.as_deref(), Some("from-file.db"));
 }
@@ -276,7 +289,8 @@ fn apply_env_invalid_poll_interval_returns_error() {
 #[test]
 #[serial]
 fn apply_env_overrides_toml_value() {
-    let mut raw: RawConfig = toml::from_str("[edge_node]\ndb_path = \"from-toml.db\"").unwrap();
+    let mut raw: RawConfig =
+        toml::from_str("[edge_node]\nid = \"test-node\"\ndb_path = \"from-toml.db\"").unwrap();
     assert_eq!(raw.edge_node.db_path.as_deref(), Some("from-toml.db"));
     with_env_vars(&[("IOTKIT_DB_PATH", "from-env.db")], || {
         apply_env(&mut raw).unwrap();
@@ -303,7 +317,9 @@ fn apply_env_invalid_bool_returns_error() {
 // ── resolve tests ──────────────────────────────────
 
 fn raw_with_defaults() -> RawConfig {
-    RawConfig::default()
+    let mut raw = RawConfig::default();
+    raw.edge_node.id = Some("test-node".to_string());
+    raw
 }
 
 #[test]
@@ -320,13 +336,145 @@ fn resolve_all_defaults() {
     assert_eq!(bp.port, "/dev/ttyAMA0");
     // rpi_local disabled by default
     assert!(config.rpi_local.is_none());
-    assert!(config.mqtt_exit.is_none());
+    assert!(config.mqtt_output.is_none());
 }
 
 #[test]
-fn resolve_mqtt_exit_uses_edge_identity_as_implicit_username() {
+fn resolve_requires_edge_node_id() {
+    let raw = RawConfig::default();
+    assert!(matches!(
+        resolve(raw, ConfigSource::DefaultsOnly),
+        Err(ConfigError::Validation(msg)) if msg.contains("edge_node.id is required")
+    ));
+}
+
+#[test]
+fn resolve_rejects_edge_node_id_outside_contract_grammar() {
+    for id in ["", "Rpi1", "rpi_1", "-rpi1", "rpi1-", "rpi/1", "端末1"] {
+        let mut raw = RawConfig::default();
+        raw.edge_node.id = Some(id.to_string());
+        assert!(
+            matches!(
+                resolve(raw, ConfigSource::DefaultsOnly),
+                Err(ConfigError::Validation(msg)) if msg.starts_with("edge_node.id ")
+            ),
+            "{id:?}"
+        );
+    }
+    let mut raw = RawConfig::default();
+    raw.edge_node.id = Some("a".repeat(65));
+    assert!(matches!(
+        resolve(raw, ConfigSource::DefaultsOnly),
+        Err(ConfigError::Validation(msg)) if msg.contains("64 bytes")
+    ));
+}
+
+#[test]
+fn resolve_exposes_edge_node_id_to_the_api() {
+    let mut raw = RawConfig::default();
+    raw.edge_node.id = Some("press-line-rpi1".to_string());
+    let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+    assert_eq!(config.edge_node_id.as_str(), "press-line-rpi1");
+    assert_eq!(config.api.edge_node_id, config.edge_node_id);
+}
+
+#[test]
+fn parse_rejects_retired_exit_mqtt_and_api_edge_node_name() {
+    assert!(
+        toml::from_str::<RawConfig>("[exit.mqtt]\nenabled = true\n").is_err(),
+        "[exit.mqtt] was renamed to [output.mqtt]"
+    );
+    assert!(
+        toml::from_str::<RawConfig>("[api]\nedge_node_name = \"old\"\n").is_err(),
+        "api.edge_node_name was replaced by edge_node.id"
+    );
+}
+
+#[test]
+fn resolve_status_defaults_to_sixty_second_heartbeat() {
+    let config = resolve(raw_with_defaults(), ConfigSource::DefaultsOnly).unwrap();
+    assert_eq!(config.status.heartbeat_interval, Duration::from_secs(60));
+}
+
+#[test]
+fn resolve_status_accepts_units_within_range() {
+    for (text, expected) in [
+        ("5s", Duration::from_secs(5)),
+        ("5000ms", Duration::from_secs(5)),
+        ("2m", Duration::from_secs(120)),
+        ("1h", Duration::from_secs(3600)),
+        (" 45s ", Duration::from_secs(45)),
+    ] {
+        let mut raw = raw_with_defaults();
+        raw.status.heartbeat_interval = Some(text.to_string());
+        let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+        assert_eq!(config.status.heartbeat_interval, expected, "{text:?}");
+    }
+}
+
+#[test]
+fn resolve_status_rejects_out_of_range_or_malformed_interval() {
+    for text in [
+        "4999ms", "4s", "3601s", "61m", "2h", "60", "60 s", "s", "-60s", "1.5m", "60S",
+    ] {
+        let mut raw = raw_with_defaults();
+        raw.status.heartbeat_interval = Some(text.to_string());
+        assert!(
+            matches!(
+                resolve(raw, ConfigSource::DefaultsOnly),
+                Err(ConfigError::Validation(msg)) if msg.contains("status.heartbeat_interval")
+            ),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn resolve_pipelines_export_path_defaults_next_to_the_database() {
     let mut raw = raw_with_defaults();
-    raw.exit.mqtt = Some(RawMqttExitConfig {
+    raw.edge_node.db_path = Some("/var/lib/iotkit/iotkit.db".to_string());
+    let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+    assert_eq!(
+        config.pipelines.export_path,
+        PathBuf::from("/var/lib/iotkit/pipelines.toml")
+    );
+
+    let config = resolve(raw_with_defaults(), ConfigSource::DefaultsOnly).unwrap();
+    assert_eq!(
+        config.pipelines.export_path,
+        PathBuf::from("pipelines.toml")
+    );
+}
+
+#[test]
+fn resolve_pipelines_export_path_accepts_override_and_rejects_db_path() {
+    let mut raw = raw_with_defaults();
+    raw.pipelines.export_path = Some("/backup/pipelines.toml".to_string());
+    let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
+    assert_eq!(
+        config.pipelines.export_path,
+        PathBuf::from("/backup/pipelines.toml")
+    );
+
+    let mut raw = raw_with_defaults();
+    raw.pipelines.export_path = Some("  ".to_string());
+    assert!(matches!(
+        resolve(raw, ConfigSource::DefaultsOnly),
+        Err(ConfigError::Validation(msg)) if msg.contains("pipelines.export_path")
+    ));
+
+    let mut raw = raw_with_defaults();
+    raw.pipelines.export_path = Some("iotkit.db".to_string());
+    assert!(matches!(
+        resolve(raw, ConfigSource::DefaultsOnly),
+        Err(ConfigError::Validation(msg)) if msg.contains("must differ from edge_node.db_path")
+    ));
+}
+
+#[test]
+fn resolve_mqtt_output_uses_edge_identity_as_implicit_username() {
+    let mut raw = raw_with_defaults();
+    raw.output.mqtt = Some(RawMqttOutputConfig {
         enabled: Some(true),
         host: Some("edge.internal".to_string()),
         port: Some(8883),
@@ -338,8 +486,8 @@ fn resolve_mqtt_exit_uses_edge_identity_as_implicit_username() {
 
     let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
     assert_eq!(
-        config.mqtt_exit,
-        Some(MqttExitConfig {
+        config.mqtt_output,
+        Some(MqttOutputConfig {
             host: "edge.internal".to_string(),
             port: 8883,
             password_file: PathBuf::from("/run/secrets/iotkit-mqtt-password"),
@@ -351,12 +499,12 @@ fn resolve_mqtt_exit_uses_edge_identity_as_implicit_username() {
 }
 
 #[test]
-fn resolve_mqtt_exit_requires_explicit_trust_mode_for_tls() {
+fn resolve_mqtt_output_requires_explicit_trust_mode_for_tls() {
     let mut raw = raw_with_defaults();
-    raw.exit.mqtt = Some(RawMqttExitConfig {
+    raw.output.mqtt = Some(RawMqttOutputConfig {
         enabled: Some(true),
         password_file: Some("/run/secrets/mqtt-password".into()),
-        ..RawMqttExitConfig::default()
+        ..RawMqttOutputConfig::default()
     });
     assert!(matches!(
         resolve(raw, ConfigSource::DefaultsOnly),
@@ -365,48 +513,48 @@ fn resolve_mqtt_exit_requires_explicit_trust_mode_for_tls() {
 }
 
 #[test]
-fn resolve_mqtt_exit_rejects_ambiguous_trust_inputs() {
+fn resolve_mqtt_output_rejects_ambiguous_trust_inputs() {
     for (trust_mode, ca_file) in [
         ("system_roots", Some("/etc/iotkit/ca.pem")),
         ("bundle_only", None),
         ("automatic", None),
     ] {
         let mut raw = raw_with_defaults();
-        raw.exit.mqtt = Some(RawMqttExitConfig {
+        raw.output.mqtt = Some(RawMqttOutputConfig {
             enabled: Some(true),
             password_file: Some("/run/secrets/mqtt-password".into()),
             trust_mode: Some(trust_mode.into()),
             ca_file: ca_file.map(str::to_owned),
-            ..RawMqttExitConfig::default()
+            ..RawMqttOutputConfig::default()
         });
         assert!(resolve(raw, ConfigSource::DefaultsOnly).is_err());
     }
 }
 
 #[test]
-fn resolve_mqtt_exit_accepts_bundle_only() {
+fn resolve_mqtt_output_accepts_bundle_only() {
     let mut raw = raw_with_defaults();
-    raw.exit.mqtt = Some(RawMqttExitConfig {
+    raw.output.mqtt = Some(RawMqttOutputConfig {
         enabled: Some(true),
         host: Some("broker.factory.example".into()),
         password_file: Some("/run/secrets/mqtt-password".into()),
         trust_mode: Some("bundle_only".into()),
         ca_file: Some("/etc/iotkit/broker-ca.pem".into()),
-        ..RawMqttExitConfig::default()
+        ..RawMqttOutputConfig::default()
     });
     let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
     assert_eq!(
-        config.mqtt_exit.unwrap().trust_mode,
+        config.mqtt_output.unwrap().trust_mode,
         MqttTrustMode::BundleOnly
     );
 }
 
 #[test]
-fn resolve_mqtt_exit_requires_password_file() {
+fn resolve_mqtt_output_requires_password_file() {
     let mut raw = raw_with_defaults();
-    raw.exit.mqtt = Some(RawMqttExitConfig {
+    raw.output.mqtt = Some(RawMqttOutputConfig {
         enabled: Some(true),
-        ..RawMqttExitConfig::default()
+        ..RawMqttOutputConfig::default()
     });
 
     let result = resolve(raw, ConfigSource::DefaultsOnly);
@@ -414,13 +562,13 @@ fn resolve_mqtt_exit_requires_password_file() {
 }
 
 #[test]
-fn resolve_mqtt_exit_rejects_zero_port() {
+fn resolve_mqtt_output_rejects_zero_port() {
     let mut raw = raw_with_defaults();
-    raw.exit.mqtt = Some(RawMqttExitConfig {
+    raw.output.mqtt = Some(RawMqttOutputConfig {
         enabled: Some(true),
         port: Some(0),
         password_file: Some("/run/secrets/iotkit-mqtt-password".to_string()),
-        ..RawMqttExitConfig::default()
+        ..RawMqttOutputConfig::default()
     });
 
     let result = resolve(raw, ConfigSource::DefaultsOnly);
@@ -517,6 +665,8 @@ fn resolve_rpi_local_enabled_uses_defaults_for_missing_fields() {
 fn explicit_instances_support_multiple_same_type_adapters() {
     let raw: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.line_a]
 type = "bravepi-mainboard"
 enabled = true
@@ -547,6 +697,8 @@ port = "/dev/serial1"
 fn explicit_rpi_local_instance_uses_its_configured_device_list() {
     let raw: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 enabled = true
@@ -587,6 +739,8 @@ address = 0x45
 fn explicit_rpi_local_instance_rejects_invalid_device_configuration() {
     let unknown_model: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -605,6 +759,8 @@ address = 0x44
 
     let duplicate_address: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -631,6 +787,8 @@ address = 0x44
 fn model_specific_scalar_types_are_validated_by_the_adapter_catalog() {
     let raw: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -660,6 +818,8 @@ fn rpi_local_public_config_rejects_the_documented_invalid_matrix() {
         (
             "empty device list",
             r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -673,6 +833,8 @@ devices = []
         (
             "invalid I2C address",
             r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -689,6 +851,8 @@ address = 0x07
         (
             "unsupported setting",
             r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -706,6 +870,8 @@ gain = true
         (
             "invalid thermocouple type",
             r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -723,6 +889,8 @@ thermocouple_type = "X"
         (
             "driver polling limit",
             r#"
+edge_node.id = "test-node"
+
 [adapters.instances.local_i2c]
 type = "rpi-local"
 config_schema_version = 1
@@ -755,6 +923,8 @@ address = 0x44
 fn legacy_and_explicit_rpi_local_forms_preserve_the_same_identity_recipe() {
     let legacy: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.bravepi]
 enabled = false
 
@@ -770,6 +940,8 @@ poll_interval_ms = 1000
 
     let explicit: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.rpi_local_default]
 type = "rpi-local"
 enabled = true
@@ -808,6 +980,8 @@ poll_interval_ms = 1000
 fn explicit_and_legacy_adapter_forms_are_mutually_exclusive() {
     let raw: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.bravepi]
 enabled = false
 
@@ -828,6 +1002,8 @@ poll_interval_ms = 1000
 fn explicit_instances_reject_duplicate_source_and_unknown_fields() {
     let duplicate: RawConfig = toml::from_str(
         r#"
+edge_node.id = "test-node"
+
 [adapters.instances.one]
 type = "bravepi-mainboard"
 config_schema_version = 1
@@ -852,6 +1028,8 @@ port = "/dev/serial1"
     assert!(
         toml::from_str::<RawConfig>(
             r#"
+edge_node.id = "test-node"
+
 [adapters.instances.one]
 type = "bravepi-mainboard"
 config_schema_version = 1
@@ -866,7 +1044,7 @@ secret_magic = "forbidden"
 
 #[test]
 fn legacy_resolution_pins_existing_identity_values() {
-    let config = resolve(RawConfig::default(), ConfigSource::DefaultsOnly).unwrap();
+    let config = resolve(raw_with_defaults(), ConfigSource::DefaultsOnly).unwrap();
     assert_eq!(config.adapter_instances.len(), 1);
     let instance = &config.adapter_instances[0];
     assert_eq!(instance.adapter_type(), "bravepi-mainboard");
@@ -955,29 +1133,29 @@ fn resolve_rejects_all_adapters_disabled_when_api_is_disabled() {
     raw.api.enabled = Some(false);
     let result = resolve(raw, ConfigSource::DefaultsOnly);
     assert!(
-        matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter, api, or MQTT exit"))
+        matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("at least one adapter, api, or MQTT output"))
     );
 }
 
 #[test]
-fn resolve_allows_mqtt_exit_only_mode() {
+fn resolve_allows_mqtt_output_only_mode() {
     let mut raw = raw_with_defaults();
     raw.adapters.bravepi = Some(RawBravepiConfig {
         enabled: Some(false),
         port: None,
     });
     raw.api.enabled = Some(false);
-    raw.exit.mqtt = Some(RawMqttExitConfig {
+    raw.output.mqtt = Some(RawMqttOutputConfig {
         enabled: Some(true),
         password_file: Some("/run/secrets/iotkit-mqtt-password".to_string()),
         allow_insecure: Some(true),
-        ..RawMqttExitConfig::default()
+        ..RawMqttOutputConfig::default()
     });
 
     let config = resolve(raw, ConfigSource::DefaultsOnly).unwrap();
     assert!(config.bravepi.is_none());
     assert!(!config.api.enabled);
-    assert!(config.mqtt_exit.is_some());
+    assert!(config.mqtt_output.is_some());
 }
 
 // ── load tests ─────────────────────────────────────
@@ -1018,7 +1196,7 @@ impl Drop for CwdGuard {
 
 #[test]
 #[serial]
-fn load_with_no_args_and_no_env_uses_defaults() {
+fn load_with_no_args_and_no_env_requires_edge_node_id() {
     let tmp = tempfile::tempdir().unwrap();
     let _cwd_guard = CwdGuard {
         prev: std::env::current_dir().unwrap(),
@@ -1026,8 +1204,10 @@ fn load_with_no_args_and_no_env_uses_defaults() {
     std::env::set_current_dir(tmp.path()).unwrap();
     with_env_vars(&[], || {
         let args = vec!["edge_node".to_string()];
-        let config = load(&args).unwrap();
-        assert_eq!(config.db_path, "iotkit.db");
+        let result = load(&args);
+        assert!(
+            matches!(result, Err(ConfigError::Validation(msg)) if msg.contains("edge_node.id is required"))
+        );
     });
 }
 
@@ -1052,6 +1232,7 @@ fn load_with_valid_file() {
         tmpfile,
         r#"
 [edge_node]
+id = "test-node"
 db_path = "loaded.db"
 
 [adapters.bravepi]
@@ -1079,7 +1260,7 @@ fn bootstrap_extracts_db_path_without_validating_unrelated_fields_and_reuses_fil
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
     write!(
         tmpfile,
-        "[edge_node]\ndb_path = \"bootstrap.db\"\n[api]\nenabled = false\n"
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"bootstrap.db\"\n[api]\nenabled = false\n"
     )
     .unwrap();
     with_env_vars(&[], || {
@@ -1094,7 +1275,7 @@ fn bootstrap_extracts_db_path_without_validating_unrelated_fields_and_reuses_fil
         // not re-read a potentially replaced config path.
         std::fs::write(
             tmpfile.path(),
-            "[edge_node]\ndb_path = \"replaced.db\"\n[adapters.instances.bad]\nsource = \"bad\"\n",
+            "[edge_node]\nid = \"test-node\"\ndb_path = \"replaced.db\"\n[adapters.instances.bad]\nsource = \"bad\"\n",
         )
         .unwrap();
         let unresolved = bootstrap.load_full().unwrap();
@@ -1108,7 +1289,7 @@ fn bootstrap_extracts_db_path_when_unrelated_toml_is_syntactically_broken() {
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
     write!(
         tmpfile,
-        "[edge_node]\ndb_path = \"bootstrap.db\"\n[unrelated]\nbroken = {{\n"
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"bootstrap.db\"\n[unrelated]\nbroken = {{\n"
     )
     .unwrap();
     with_env_vars(&[], || {
@@ -1129,7 +1310,7 @@ fn bootstrap_fallback_ignores_multiline_string_content() {
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
     write!(
         tmpfile,
-        "[edge_node]\ndb_path = \"canonical.db\"\n[unrelated]\nbroken = \"\"\"\ndb_path = \"sentinel.db\"\n"
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"canonical.db\"\n[unrelated]\nbroken = \"\"\"\ndb_path = \"sentinel.db\"\n"
     )
     .unwrap();
     with_env_vars(&[], || {
@@ -1174,7 +1355,7 @@ fn bootstrap_extracts_all_valid_db_path_forms() {
         ("edge_node = { db_path = \"inline.db\" }\n", "inline.db"),
         ("edge_node.db_path = 'dotted.db'\n", "dotted.db"),
         (
-            "[edge_node]\ndb_path = 'single-quoted.db'\n",
+            "[edge_node]\nid = \"test-node\"\ndb_path = 'single-quoted.db'\n",
             "single-quoted.db",
         ),
     ] {
@@ -1195,7 +1376,11 @@ fn bootstrap_extracts_all_valid_db_path_forms() {
 #[serial]
 fn bootstrap_rejects_effective_db_path_change_before_full_load() {
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-    write!(tmpfile, "[edge_node]\ndb_path = \"bootstrap.db\"\n").unwrap();
+    write!(
+        tmpfile,
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"bootstrap.db\"\n"
+    )
+    .unwrap();
     with_env_vars(&[], || {
         let args = vec![
             "edge_node".to_string(),
@@ -1219,6 +1404,7 @@ fn load_integration_full_toml() {
         tmpfile,
         r#"
 [edge_node]
+id = "test-node"
 db_path = "integration.db"
 
 [adapters.bravepi]
@@ -1253,7 +1439,11 @@ poll_interval_ms = 750
 #[serial]
 fn load_with_env_config_path_valid_file() {
     let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
-    write!(tmpfile, "[edge_node]\ndb_path = \"env-path.db\"").unwrap();
+    write!(
+        tmpfile,
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"env-path.db\""
+    )
+    .unwrap();
     with_env_vars(
         &[("IOTKIT_CONFIG_PATH", tmpfile.path().to_str().unwrap())],
         || {
@@ -1270,7 +1460,11 @@ fn load_with_env_config_path_valid_file() {
 fn load_with_implicit_iotkit_toml() {
     let tmp = tempfile::tempdir().unwrap();
     let toml_path = tmp.path().join("iotkit.toml");
-    std::fs::write(&toml_path, "[edge_node]\ndb_path = \"implicit.db\"").unwrap();
+    std::fs::write(
+        &toml_path,
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"implicit.db\"",
+    )
+    .unwrap();
     let _cwd_guard = CwdGuard {
         prev: std::env::current_dir().unwrap(),
     };
@@ -1290,9 +1484,17 @@ fn load_with_implicit_iotkit_toml() {
 #[serial]
 fn load_cli_arg_takes_precedence_over_env() {
     let mut cli_file = tempfile::NamedTempFile::new().unwrap();
-    write!(cli_file, "[edge_node]\ndb_path = \"from-cli.db\"").unwrap();
+    write!(
+        cli_file,
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"from-cli.db\""
+    )
+    .unwrap();
     let mut env_file = tempfile::NamedTempFile::new().unwrap();
-    write!(env_file, "[edge_node]\ndb_path = \"from-env.db\"").unwrap();
+    write!(
+        env_file,
+        "[edge_node]\nid = \"test-node\"\ndb_path = \"from-env.db\""
+    )
+    .unwrap();
     with_env_vars(
         &[("IOTKIT_CONFIG_PATH", env_file.path().to_str().unwrap())],
         || {

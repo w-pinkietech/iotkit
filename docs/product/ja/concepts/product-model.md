@@ -5,7 +5,7 @@ description: "IoTKitの完全な製品範囲、component責務、権威の流れ
 language: ja
 translation_key: concepts.product-model
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit製品モデル
@@ -82,3 +82,44 @@ Observationは次の3つで連続性と順序を表す。
 - **timestamp**：その出力を確定させた入力を端末が受信した実時刻。時計補正で逆行することがあるため順序には使わない。
 
 Observationは端末に長期保存しない。端末は評価状態、現在の累積値またはstate、series、次のsequence、未送信のpublicationだけを保持し、履歴の保存は受信側のアプリケーションが所有する。
+
+## 設定の所有（端末完結の再設計）
+
+再設計後の端末は、設定を「変更にプロセス再起動を要するもの」と「動かしたまま変えられるもの」に分けて所有する。前者はTOMLファイル、後者はSQLiteに置く。
+
+| 所有 | 項目 | 反映 |
+|---|---|---|
+| TOML | edge-node-id、MQTT Brokerへの接続、DBのpath、statusのheartbeat間隔、pipeline定義の書き出し先、Console APIのbind、Input Adapterのインスタンス | プロセス再起動 |
+| SQLite（Consoleから編集） | pipeline定義 | 即時 |
+| SQLite（状態） | 評価状態、累積値またはstate、series、次のsequence、未送信のpublication、pipeline定義のハッシュ | — |
+
+TOMLのテーブルは次のとおり。edge-node-idは端末を識別する安定したIDで必須とし、hostnameなどからの暗黙の既定値は持たない。edge-node-idとpipeline-idはどちらも[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)の識別子の制約に従い、違反する値は起動エラーになる。
+
+~~~toml
+[edge_node]
+id = "rpi1"                       # 必須。Broker namespace内で一意
+db_path = "/var/lib/iotkit/iotkit.db"
+
+[output.mqtt]
+enabled = true
+host = "mqtt.example"
+port = 8883
+password_file = "/run/secrets/iotkit-mqtt-password"
+trust_mode = "bundle_only"        # system_roots または bundle_only
+ca_file = "/etc/iotkit/broker-ca.pem"
+
+[status]
+heartbeat_interval = "60s"        # 5s〜1h。既定は60s
+
+[pipelines]
+export_path = "/var/lib/iotkit/pipelines.toml"  # 既定はDBと同じディレクトリ
+
+[api]
+enabled = true
+bind = "0.0.0.0:8443"
+
+[adapters.instances.<name>]
+# Input Adapterのインスタンス。Input Adapter契約 v1を参照
+~~~
+
+`pipelines.export_path`は、pipeline定義の変更がコミットされるたびにDBから書き出すバックアップである。起動時には読まず、復元は明示的なimport操作で行う。

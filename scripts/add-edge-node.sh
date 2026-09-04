@@ -127,7 +127,7 @@ rm "$stage/new-password"
 broker_host=$(sed -n 's/^IOTKIT_BROKER_HOST=//p' "$edge_env")
 broker_port=$(sed -n 's/^IOTKIT_BROKER_PORT=//p' "$edge_env")
 cat >"$stage/handoff/edge-mqtt.toml" <<EOF
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = "$broker_host"
 port = $broker_port

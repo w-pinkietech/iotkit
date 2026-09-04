@@ -16,7 +16,7 @@ use iotkit_core_publish::wire::{
     publication_id,
 };
 use iotkit_core_storage::{DbHandle, StorageError};
-use iotkit_edge_node::config::{MqttExitConfig, MqttTrustMode};
+use iotkit_edge_node::config::{MqttOutputConfig, MqttTrustMode};
 use iotkit_edge_node::health::HealthState;
 use rumqttc::{
     AsyncClient, Event, Incoming, MqttOptions, QoS, SubscribeFilter, SubscribeReasonCode, Transport,
@@ -32,7 +32,7 @@ const MQTT_PACKET_OVERHEAD_BYTES: usize = 16;
 const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(crate) struct RuntimeConfig {
-    connection: MqttExitConfig,
+    connection: MqttOutputConfig,
     binding: MqttBinding,
     password: String,
     ca: Option<Vec<u8>>,
@@ -59,7 +59,7 @@ struct PreparedDescriptor {
 /// decision so its first status heartbeat reflects the running collector.
 pub(crate) async fn prepare_mqtt_publish_runtime(
     db: DbHandle,
-    config: MqttExitConfig,
+    config: MqttOutputConfig,
 ) -> Result<RuntimeConfig, String> {
     let password = read_password(&config)?;
     let ca = read_ca(&config)?;
@@ -747,7 +747,7 @@ fn ensure_target(conn: &Connection, expected_endpoint: &str) -> Result<(), Strin
     }
 }
 
-fn read_password(config: &MqttExitConfig) -> Result<String, String> {
+fn read_password(config: &MqttOutputConfig) -> Result<String, String> {
     let contents = std::fs::read_to_string(&config.password_file).map_err(|error| {
         format!(
             "failed to read MQTT password file {}: {error}",
@@ -761,7 +761,7 @@ fn read_password(config: &MqttExitConfig) -> Result<String, String> {
     Ok(password.to_string())
 }
 
-fn read_ca(config: &MqttExitConfig) -> Result<Option<Vec<u8>>, String> {
+fn read_ca(config: &MqttOutputConfig) -> Result<Option<Vec<u8>>, String> {
     match (&config.trust_mode, &config.ca_file) {
         (MqttTrustMode::SystemRoots, None) => Ok(None),
         (MqttTrustMode::BundleOnly, Some(path)) => std::fs::read(path)
@@ -771,7 +771,7 @@ fn read_ca(config: &MqttExitConfig) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-fn endpoint(config: &MqttExitConfig) -> String {
+fn endpoint(config: &MqttOutputConfig) -> String {
     let scheme = if config.allow_insecure {
         "mqtt"
     } else {

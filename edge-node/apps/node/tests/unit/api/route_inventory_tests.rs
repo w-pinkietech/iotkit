@@ -53,7 +53,7 @@ async fn network_admin_passphrase_setup_route_is_absent() {
         cfg: ApiConfig {
             enabled: true,
             bind: "127.0.0.1:0".parse().unwrap(),
-            edge_node_name: "test".into(),
+            edge_node_id: "test".parse().unwrap(),
         },
         epoch: "test".into(),
         fingerprint: "test".into(),

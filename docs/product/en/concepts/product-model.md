@@ -5,7 +5,7 @@ description: "Defines the complete product scope, component responsibilities, au
 language: en
 translation_key: concepts.product-model
 status: stable
-revision: 3
+revision: 4
 ---
 
 # IoTKit product model
@@ -114,3 +114,44 @@ Continuity and order are expressed by three fields.
 - **timestamp**: the real time at which the device received the input that settled the output. It can move backwards after a clock correction, so it is not used for ordering.
 
 Observations are not stored long-term on the device. The device keeps only evaluation state, the current accumulated value or state, the series, the next sequence, and unsent publications; history belongs to the receiving application.
+
+## Configuration ownership (device-local redesign)
+
+After the redesign, the device splits its configuration by whether a change requires a process restart. Settings that require a restart live in a TOML file; settings that can change while the process runs live in SQLite.
+
+| Owner | Items | Takes effect |
+|---|---|---|
+| TOML | edge-node-id, MQTT Broker connection, database path, status heartbeat interval, pipeline definition export path, Console API bind, Input Adapter instances | Process restart |
+| SQLite (edited from the Console) | Pipeline definitions | Immediately |
+| SQLite (state) | Evaluation state, accumulated value or state, series, next sequence, unsent publications, hash of the pipeline definitions | — |
+
+The TOML tables are as follows. The edge-node-id is the stable identifier of the device; it is required and has no implicit default such as the hostname. Both edge-node-id and pipeline-id follow the identifier rules in the [MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md); a violating value is a startup error.
+
+~~~toml
+[edge_node]
+id = "rpi1"                       # required; unique within the Broker namespace
+db_path = "/var/lib/iotkit/iotkit.db"
+
+[output.mqtt]
+enabled = true
+host = "mqtt.example"
+port = 8883
+password_file = "/run/secrets/iotkit-mqtt-password"
+trust_mode = "bundle_only"        # system_roots or bundle_only
+ca_file = "/etc/iotkit/broker-ca.pem"
+
+[status]
+heartbeat_interval = "60s"        # 5s to 1h; default 60s
+
+[pipelines]
+export_path = "/var/lib/iotkit/pipelines.toml"  # default: next to the database
+
+[api]
+enabled = true
+bind = "0.0.0.0:8443"
+
+[adapters.instances.<name>]
+# Input Adapter instances; see the Input Adapter contract v1
+~~~
+
+`pipelines.export_path` is a backup derived from the database and written after every committed change to the pipeline definitions. It is not read at startup; restoring from it is an explicit import operation.

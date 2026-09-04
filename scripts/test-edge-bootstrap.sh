@@ -497,6 +497,7 @@ expected_serial=$(openssl x509 -in "$scratch/rotated.pem" -noout -serial)
 
 cat >"$scratch/edge.toml" <<EOF
 [edge_node]
+id = "bootstrap-edge-1"
 db_path = "$scratch/edge.db"
 health_json_path = "$scratch/health.json"
 
@@ -520,6 +521,7 @@ edge_pid=$!
 
 cat >"$scratch/edge2.toml" <<EOF
 [edge_node]
+id = "bootstrap-edge-2"
 db_path = "$scratch/edge2.db"
 health_json_path = "$scratch/health2.json"
 
@@ -891,6 +893,7 @@ if [[ "${IOTKIT_TEST_RECOVERY_DRILL:-0}" == 1 ]]; then
 
   cat >"$scratch/recovered-edge.toml" <<EOF
 [edge_node]
+id = "recovered-edge"
 db_path = "$candidate_db"
 health_json_path = "$scratch/recovered-health.json"
 
@@ -903,7 +906,7 @@ enabled = false
 [api]
 enabled = false
 
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = "localhost"
 port = $port

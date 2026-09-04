@@ -85,7 +85,7 @@ fn daemon_rejects_gateway_database_before_migration_or_other_mutation() {
     std::fs::write(
         &config_path,
         format!(
-            "[edge_node]\ndb_path = {:?}\nhealth_json_path = {:?}\n\
+            "[edge_node]\nid = \"cutover-node\"\ndb_path = {:?}\nhealth_json_path = {:?}\n\
              [adapters.bravepi]\nenabled = false\n\
              [api]\nenabled = true\nbind = \"127.0.0.1:0\"\n",
             db_path.to_str().unwrap(),
@@ -121,9 +121,9 @@ fn normal_pre_recovery_and_current_databases_keep_migration_startup_behavior() {
         std::fs::write(
             &config_path,
             format!(
-                "[edge_node]\n db_path = {:?}\n\
+                "[edge_node]\n id = \"cutover-node\"\n db_path = {:?}\n\
                  [api]\n enabled = false\n\
-                 [exit.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
+                 [output.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
                  password_file = {:?}\n allow_insecure = true\n",
                 db_path,
                 directory.path().join(format!("{name}-missing-password")),
@@ -171,9 +171,9 @@ fn missing_and_empty_databases_reach_normal_post_migration_startup() {
         std::fs::write(
             &config_path,
             format!(
-                "[edge_node]\n db_path = {:?}\n\
+                "[edge_node]\n id = \"cutover-node\"\n db_path = {:?}\n\
                  [api]\n enabled = false\n\
-                 [exit.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
+                 [output.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
                  password_file = {:?}\n allow_insecure = true\n",
                 db_path,
                 directory.path().join(format!("{name}-missing-password")),

@@ -24,7 +24,7 @@ fn api_config() -> ApiConfig {
     ApiConfig {
         enabled: true,
         bind: "127.0.0.1:0".parse().unwrap(),
-        edge_node_name: "ops-test-edge".to_string(),
+        edge_node_id: "ops-test-edge".parse().unwrap(),
     }
 }
 

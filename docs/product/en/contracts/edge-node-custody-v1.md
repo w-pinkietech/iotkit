@@ -5,7 +5,7 @@ description: "Defines MQTT custody transfer plus the separate bounded Edge Node 
 language: en
 translation_key: contracts.edge-node-custody-v1
 status: stable
-revision: 11
+revision: 12
 ---
 
 # Edge Node custody contract v1 (R11 exit)
@@ -399,11 +399,11 @@ private routed network, or another deployment-specific route; IoTKit requires no
 Secrets are stored outside Git and never appear in argv, logs, Debug output, audit detail, or query
 output. D10 owns later authentication hardening.
 
-Edge Node configuration names the Broker and a credential file; the MQTT username is always the
-Edge Node's generated `edge_node_id`:
+Edge Node configuration names the Broker and a credential file under `[output.mqtt]`; the MQTT
+username is always the Edge Node's generated `edge_node_id`:
 
 ```toml
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = "mqtt.edge.example"
 port = 8883

@@ -115,6 +115,18 @@
       "rationale": "MQTT Output Adapter v1 schema, fixtures, or conformance checks changed; the contract document and the Observation model may need the same change."
     },
     {
+      "id": "edge-node-toml-config",
+      "path_prefixes": [
+        "edge-node/apps/node/src/config.rs",
+        "edge-node/core/types/src/lib.rs"
+      ],
+      "doc_paths": [
+        "concepts/product-model.md",
+        "contracts/mqtt-output-adapter-v1.md"
+      ],
+      "rationale": "Edge Node TOML tables, defaults, or identifier rules changed; the configuration ownership section and the identifier constraints may need the same change."
+    },
+    {
       "id": "console-and-edge-surface",
       "path_prefixes": [
         "edge/frontend/",

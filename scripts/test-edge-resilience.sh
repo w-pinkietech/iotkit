@@ -220,6 +220,7 @@ cargo build --manifest-path "$repo_root/Cargo.toml" -p iotkit-edge-node --bin io
 
 cat >"$scratch/edge.toml" <<EOF
 [edge_node]
+id = "resilience-edge"
 db_path = "$scratch/edge.db"
 health_json_path = "$scratch/health.json"
 
@@ -232,7 +233,7 @@ enabled = false
 [api]
 enabled = false
 
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = "127.0.0.1"
 port = $broker_port

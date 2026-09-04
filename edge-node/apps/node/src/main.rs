@@ -128,6 +128,7 @@ fn main() {
 
     tracing::info!(source = ?config.config_source, "config loaded");
     tracing::info!(
+        edge_node_id = %config.edge_node_id,
         db_path = %config.db_path,
         retention_days = config.retention_days,
         quarantine_ttl_days = config.quarantine_ttl_days,
@@ -135,9 +136,10 @@ fn main() {
         disk_high_watermark_pct = config.disk_high_watermark_pct,
         api_enabled = config.api.enabled,
         api_bind = %config.api.bind,
-        api_edge_node_name = %config.api.edge_node_name,
         input_adapter_instances = config.adapter_instances.len(),
-        mqtt_exit_enabled = config.mqtt_exit.is_some(),
+        mqtt_output_enabled = config.mqtt_output.is_some(),
+        heartbeat_interval_ms = config.status.heartbeat_interval.as_millis(),
+        pipelines_export_path = %config.pipelines.export_path.display(),
         "effective config"
     );
     if let Some(bp) = &config.bravepi {
@@ -154,13 +156,13 @@ fn main() {
             "input adapter instance configured"
         );
     }
-    if let Some(mqtt) = &config.mqtt_exit {
+    if let Some(mqtt) = &config.mqtt_output {
         tracing::info!(
             host = %mqtt.host,
             port = mqtt.port,
             tls = !mqtt.allow_insecure,
             ca_file = ?mqtt.ca_file,
-            "MQTT exit config"
+            "MQTT output config"
         );
     }
 
@@ -275,7 +277,7 @@ async fn run(
         })
         .await
         .expect("ledger epoch");
-    let prepared_mqtt_runtime = if let Some(mqtt_config) = config.mqtt_exit.clone() {
+    let prepared_mqtt_runtime = if let Some(mqtt_config) = config.mqtt_output.clone() {
         match mqtt_publish_task::prepare_mqtt_publish_runtime(db.clone(), mqtt_config).await {
             Ok(runtime) => {
                 tracing::info!("MQTT exit publication target prepared");
