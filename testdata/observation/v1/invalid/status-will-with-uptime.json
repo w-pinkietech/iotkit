@@ -1,0 +1,7 @@
+{
+  "channel": "status",
+  "status_form": "offline-will",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "payload": "{\"uptime_ms\":8243789,\"unix_epoch_ms\":null,\"value\":\"offline\"}",
+  "reason": "the Will is registered at connect time, so the Broker cannot know the uptime at disconnect"
+}

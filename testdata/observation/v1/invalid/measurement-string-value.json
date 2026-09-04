@@ -2,6 +2,6 @@
   "channel": "observation",
   "kind": "measurement",
   "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-temperature/measurement",
-  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":1,\"timestamp\":1,\"value\":\"23.5\"}",
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":1,\"uptime_ms\":1000,\"unix_epoch_ms\":1,\"value\":\"23.5\"}",
   "reason": "measurement value must be a JSON number"
 }

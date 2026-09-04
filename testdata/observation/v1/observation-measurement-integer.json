@@ -5,5 +5,5 @@
   "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-temperature/measurement",
   "qos": 1,
   "retain": true,
-  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":43,\"timestamp\":1784190001123,\"value\":24}"
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":43,\"uptime_ms\":8124456,\"unix_epoch_ms\":1784190001123,\"value\":24}"
 }

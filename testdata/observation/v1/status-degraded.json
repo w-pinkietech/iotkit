@@ -5,6 +5,6 @@
   "topic": "iotkit/v1/edge-node/rpi1/status",
   "qos": 1,
   "retain": true,
-  "payload": "{\"timestamp\":1784190060123,\"value\":\"degraded\"}",
+  "payload": "{\"uptime_ms\":8183456,\"unix_epoch_ms\":1784190060123,\"value\":\"degraded\"}",
   "consumer_note": "Record the interval as an unrecoverable gap. Distinguish it from offline, where the outbox preserves counts for later delivery."
 }
