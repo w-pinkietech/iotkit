@@ -5,24 +5,24 @@ description: "Loopback限定のIoTKit試用profileを起動、確認、停止、
 language: ja
 translation_key: operations.trial-profile
 status: draft
-revision: 5
+revision: 6
 ---
 
 # このPCでIoTKitを試す
 
-現場導入の判断を始める前に、実際のIoTKit収集loopを確認するためのprofileです。
-一つのLinux host上でIoTKit Edge Node、標準Mosquitto Broker、IoTKit Edgeを実行し、
-全network listenerをIPv4 loopbackに限定します。生成sampleは通常のInput Adapterと
-保管責任contractを通り、Console mockやDB seedではありません。
+現場導入の判断を始める前に、IoTKitが実際にObservationを公開する様子を確認するためのprofileです。
+一つのLinux host上でIoTKit Edge Nodeと標準のMosquitto Brokerを実行し、networkのlistenerを
+IPv4 loopbackに限定します。生成したsampleは通常のInput Adapterとpipelineを通って
+[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)のtopicへ公開され、
+`mosquitto_sub`がそれを購読します。Console mockやDB seedではありません。
 
-このprofileは評価専用です。TLS、backup、実sensor、PostgreSQL、HA、現場向けupdateは
-設定しません。
+このprofileは評価専用です。TLS、実sensor、現場向けupdateは設定しません。
 
 ## 必要なもの
 
 - GitとPython 3.14以降を使用できる対応Linux host。
 - `docker compose` commandを含むDocker Engine。
-- local TCP port 8080と18883の空き。
+- local TCP port 18883の空き。
 
 ## 起動
 
@@ -33,33 +33,35 @@ cleanなrepository cloneで実行します。
 ./scripts/iotkit trial up
 ```
 
-初回の`up`はtrial imageをbuildするため、host性能により数分かかります。途中で中断した
-場合は、同じ`up`をもう一度実行すると初期化をやり直します。
+初回の`up`はEdge Nodeのimageをbuildするため、host性能により数分かかります。途中で中断した
+場合は、同じ`up`をもう一度実行すると初期化をやり直します。生成したcredentialとDBは
+repository外の`${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial`へowner-only権限で保存します。
 
-表示に従い、12文字以上128文字以下の試用管理者passwordを決めます。Launcherは
-passwordを`iotkit.toml`、command argument、出力へ書きません。生成credentialとDBは
-repository外の`${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial`へowner-only権限で
-保存します。
+`up`は、Edge Nodeの起動後に次の3本のpipeline定義をimportします。edge-node-idは`trial`です。
 
-`http://127.0.0.1:8080`を開き、login ID `admin`と決めたpasswordでログインします。
-黄色の**お試し環境**表示が常に見えることを確認してください。
+| pipeline-id | kind | 入力 |
+|---|---|---|
+| `sample-illuminance` | `measurement` | 試用照度（三角波、120〜200 lx、入力ごとに公開） |
+| `sample-contact` | `state` | 試用接点状態（矩形波）の二値化 |
+| `sample-cycles` | `accumulated-count` | 同じ接点状態の立ち上がり回数 |
 
 ## 最短の確認手順
 
-1. **概要**で収集ノードが1台検出されていることを確認する。
-2. **機器管理**で収集ノードを選び、有効化する。
-3. 試用照度sensorと試用接点状態sensorを開き、案内された表示設定を完了する。
-4. **センサー一覧**で次の両方を確認する。
-   - 照度（連続値・三角波）がゆっくり変化する。
-   - 接点状態（矩形波）が High / Low（1 / 0）を切り替える。
-5. **受信履歴**で両系列の行が増えることを確認する。
+```bash
+./scripts/iotkit trial watch
+```
 
-試用sample Adapterは同じ`trial-sample`から連続値と状態の2系列を、通常のInput Adapter /
-保管責任経路へ流します。DB seedやConsole mockではありません。追加の波形設定は不要で、
-2行の`iotkit.toml`のまま両方有効です。
+`watch`はBroker内の`mosquitto_sub`を読み取り専用のaccountで動かし、届いたtopic、retainフラグ、
+payloadを1行ずつ表示します。Ctrl-Cで終了します。次を確認してください。
 
-有効化は実際の保管責任contractの一部なので、試用でも明示操作として残しています。
-停止と再起動ではDBを削除しません。
+1. `iotkit/v1/edge-node/trial/status`に`"value":"online"`と`"faults":[]`のheartbeatが届く。
+2. `.../observation/sample-illuminance/measurement`の`value`が8ずつ増減し、`sequence`が1ずつ増える。
+3. `.../observation/sample-contact/state`の`value`が`true`と`false`を交互に繰り返す。
+4. `.../observation/sample-cycles/accumulated-count`の`value`が`0`から始まり、`state`が`true`に
+   なるたびに1増える。
+5. `watch`を再実行すると、最初にretainされた最新値（retainフラグ`1`）が各topicにつき1件届く。
+
+停止と再起動ではDBを削除しません。再起動後もseriesとsequenceは続きます。
 
 ```bash
 ./scripts/iotkit trial status
@@ -67,8 +69,8 @@ repository外の`${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial`へowner-only
 ./scripts/iotkit trial up
 ```
 
-`trial down`では、Edge Nodeに15秒のgraceful-stop windowを与えます。pending custody
-recordはdurableのまま後の`up`でretryし、未ack recordをdeliveredとして扱いません。
+`trial down`では、Edge Nodeに15秒のgraceful-stop windowを与えます。Edge Nodeは時刻付きの
+`offline`をstatusへ公開してから切断し、未送信のObservationはoutboxに残って次の`up`で届きます。
 
 ## 初期化
 
@@ -92,10 +94,9 @@ config_version = 1
 profile = "trial"
 
 [trial]
-console_port = 18080
 broker_port = 18884
 sample_interval_ms = 1000
 ```
 
-`console_bind`と`broker_bind`に指定できるのはIPv4 loopback addressだけです。
+`broker_bind`に指定できるのはIPv4 loopback addressだけです。
 未知のkey、version、profile、loopback以外のbindは拒否します。

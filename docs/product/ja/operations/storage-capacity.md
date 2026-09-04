@@ -5,10 +5,12 @@ description: "Embedded SQLiteとPostgreSQL profileの再現可能な容量回帰
 language: ja
 translation_key: operations.storage-capacity
 status: stable
-revision: 7
+revision: 8
 ---
 
 # IoTKit Edge storage capacity regression smoke
+
+> **移行中の注記（#232 子Issue 5）。** 中央の`iotkit-edge`とその容量計測（`scripts/test-edge-capacity.sh`、`embedded` / `postgres` profile）は#251 で削除した。現在有効なのは「端末側のoutbox」の節だけであり、本書の書き直しは#250 の中で行う。
 
 IoTKitは、`embedded`または`postgres`という名前だけで無制限の規模を保証しない。
 対応規模は、対象version、hardware、payload、rule、保持期間、backup/query負荷を固定した

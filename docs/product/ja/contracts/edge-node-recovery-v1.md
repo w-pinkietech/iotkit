@@ -5,7 +5,7 @@ description: "Sanitized暗号化Edge Node backup container、fenced-candidate re
 language: ja
 translation_key: contracts.edge-node-recovery-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit Edge Node復旧契約 v1
@@ -306,8 +306,7 @@ hardware replacementはreadingもdedup claimもrestoreしません。
 利用可能な範囲で保持し、旧Broker credentialをfencedのままにし、新しい`edge_node_id`の
 fresh DBを初期化して通常commissioningを行います。以前の`recovery_hold`を削除、書換え、
 新Nodeの許可として利用しません。別identityの通常commissioningはblockしません。
-Sensor identityと設定への影響は
-[custody契約](edge-node-custody-v1.md#restart交換時のidentity)で定義します。
+Sensor identityと設定への影響を定めていたcustody契約は#251 で削除した。本契約自体も#250 で削除する。
 
 Legacy plaintext snapshot fallbackはありません。Former implementation artifact、
 renameしたEdge server backup、unauthenticated DB copy、private MQTT/TLS materialを

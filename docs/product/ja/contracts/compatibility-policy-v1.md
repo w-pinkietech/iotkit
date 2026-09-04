@@ -5,10 +5,12 @@ description: "製品1.xにおける互換性約束、独立したversion domain�
 language: ja
 translation_key: contracts.compatibility-policy-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit v1 互換性方針
+
+> **移行中の注記（#232 子Issue 5）。** 本方針は製品1.0.0まで効力を持たない。中央の`iotkit-edge`、custody契約、旧Output Adapter契約、Console JSONは#251 で削除した。それらに触れる行は削除済みの構成を指しており、Edge Nodeだけで完結する構成への書き直しは#250 の最終PRで行う。
 
 状態: **製品が1.0.0に到達した時点で規範**。製品major version 1の互換性約束を定義し、
 0.x releaseを遡って互換seriesにするものではありません。
@@ -30,11 +32,8 @@ directoryの最大numeric migration versionが異なるstorage schema versionを
 | Domain | Version unit | Public authorityとevidence |
 | --- | --- | --- |
 | Device ingest | `/api/v1`とJSON `Envelope` / `EnvelopeAck`契約 | `ingest-v1.md`、`iotkit-ingest-contract`、fixture、test |
-| Edge Node custody | MQTT topic major `iotkit/v1`と各payloadの`schema_version` | `edge-node-custody-v1.md`、publisher/receiver type、fixture、test |
-| Descriptor snapshot | Payloadの`schema_version` | v1 topicは現在body schema 2を運ぶ。Topicとbody versionは独立 |
-| Console JSON | `edge/openapi/edge-console-v1.yaml` | OpenAPI記載operationと生成browser type |
 | Input Adapter | `adapter_api_major`と`config_schema_version` | `input-adapter-v1.md`とcompile-time host API |
-| Output Adapter | Version付きAdapter ID、configuration schema、payload schema | `output-adapter-v1.md`、`iotkit.mqtt-json.v1`と`pinikiet.mqtt.v1`を含む |
+| MQTT Output Adapter | MQTT topic major `iotkit/v1`とpayloadのfield集合 | `mqtt-output-adapter-v1.md`、`testdata/observation/v1`のschemaとfixture、producer / consumerのconformance test |
 | Persistent storage | Storeごとのmigration/schema number | Release manifest内のNode SQLite、IoTKit Edge SQLite/PostgreSQL evidence |
 
 Manifestはindexであり、第二のcontract authorityではありません。対になった製品文書、
@@ -47,7 +46,6 @@ code/schema、fixture、conformance testが不一致ならcontract defectです�
 - `/api/v1`の認証付きHTTP ingest
 - Edge Node MQTT custody v1 topicと、独立versionのdescriptor body schemaを含む
   exactな対応payload schema
-- `edge/openapi/edge-console-v1.yaml`で記載したConsole JSON operationとschemaだけ
 - Input Adapter API major 1と記載されたconfiguration schema
 - Version付きOutput Adapter ID、route configuration、payload
 
@@ -101,8 +99,6 @@ topic、payload、configuration、database解釈を推測してはいけませ�
 | Supported custody v1 payloadを送る既存Edge Node → 新しい1.x IoTKit Edge | Supported。 |
 | 新しいEdge Node → 古いIoTKit Edge | Guaranteeしない。先にIoTKit Edge、次にEdge Nodeを更新する。 |
 | 既存v1 Output Adapter consumer → 新しい1.x IoTKit Edge | 同じversion付きAdapter IDとexact payload contractならsupported。 |
-| 既存Console JSON v1 API client → 新しい1.x IoTKit Edge | OpenAPI記載のpublic subsetではsupported。 |
-| 古いConsole browser asset → 新しいIoTKit Edge | Unsupported。Console assetはmatched no-store same-release surface。 |
 | 古い`nodectl`またはdirect database access → 新しいNode schema | Unsupported。対応するreleaseのtoolを使い、direct database mutationを互換pathにしない。 |
 | API major 1向けにcompileしたInput Adapter → 新しいEdge Node | Source/configuration contractがv1である間はsupportするが、AdapterはEdge Node releaseとともにrebuildする。 |
 

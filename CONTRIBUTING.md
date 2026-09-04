@@ -57,16 +57,16 @@ from the repository root; direct `node`, `cargo`, and `npm` commands require
 that shell setup. CI uses the same `mise.toml` through `jdx/mise-action`.
 
 - Rust 1.98.0 with `rustfmt` and `clippy`;
-- Node.js 24 and npm for Console assets and tests;
-- Python 3.14 for trial scripts;
-- `jq` 1.8.2 for trial validation and integration tests;
-- SQLite 3.53.4 for integration tests;
+- Node.js 24 and npm for the repository checks under `scripts/`;
+- Python 3.14 for the trial launcher and the journey's payload checks;
+- `jq` 1.8.2 and SQLite 3.53.4 for scripts;
 - `cargo-nextest` 0.9.143 for Rust tests;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
-Docker Compose, OpenSSL, and `curl` remain host dependencies for the integration
-scripts and are not managed by `mise`. No Raspberry Pi or physical sensor is
-needed for the normal development loop.
+`mosquitto` with `mosquitto-clients` (for `scripts/test-journey.sh` and
+`scripts/test-observation-consumer.sh`) and Docker Compose (for the trial
+profile) remain host dependencies and are not managed by `mise`. No Raspberry Pi
+or physical sensor is needed for the normal development loop.
 
 ```bash
 mise install
@@ -80,7 +80,7 @@ On Debian or Ubuntu, the non-language packages can be installed with:
 ```bash
 sudo apt-get update
 sudo apt-get install --yes build-essential pkg-config libudev-dev docker.io docker-compose-v2 \
-  openssl curl
+  mosquitto mosquitto-clients
 ```
 
 Do not commit credentials, generated certificates, local databases, or deployment
@@ -92,7 +92,7 @@ values take precedence; override either limit explicitly for a single command
 when needed, for example:
 
 ```bash
-CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p iotkit-edge
+CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p iotkit-edge-node
 ```
 
 ## First hour
@@ -111,43 +111,35 @@ Then read the product model and the architecture document linked above. The
 short version of the runtime path is:
 
 ```text
-sensor / device
-  -> Rust IoTKit Edge Node
-  -> MQTT Broker
-  -> Rust IoTKit Edge
-  -> Output Adapter
-  -> external application
+sensor -> Input Adapter -> pipeline -> MQTT Output Adapter -> MQTT Broker -> consumer
+          |<---------------- IoTKit Edge Node (one per device) ---------------->|
 ```
 
 ### 10–30 minutes: run one focused test in each area
 
 ```bash
-# Edge Node and Input Adapter
+# Input Adapter
 cargo test -p bravepi-mainboard-adapter
 
-# IoTKit Edge and Output Adapters
-cargo test -p iotkit-edge
-cargo test -p iotkit-output-adapter-testkit
+# Pipelines, series, and the Observation / status wire form
+cargo test -p iotkit-core-pipeline
 
-# Browser behavior and generated Console types
-npm ci --prefix edge/frontend
-npm run check --prefix edge/frontend
+# Node composition root (config, MQTT Output Adapter wiring)
+cargo test -p iotkit-edge-node
 ```
 
 ### 30–45 minutes: exercise the product without hardware
 
-These scripts create disposable environments and use synthetic records:
+The journey builds the two binaries, starts a throwaway Mosquitto, runs the node
+with the `trial-sample` Input Adapter, and checks everything at an independent
+consumer, first the minimal loop and then fault injection:
 
 ```bash
-# Clean bootstrap, TLS, login, Broker ACL, and Edge startup
-scripts/test-edge-bootstrap.sh
-
-# Semantic Output Adapter, MQTT PUBACK, outage, and restart convergence
-scripts/test-edge-output.sh
+scripts/test-journey.sh
 ```
 
-Both require Docker access. They must not reuse production databases,
-credentials, certificates, or deployment directories.
+It needs `mosquitto`, `mosquitto_pub`, and `mosquitto_sub` on `PATH`. It creates
+its own state under a temporary directory and never touches a deployment.
 
 ### 45–60 minutes: trace a small change
 
@@ -160,22 +152,20 @@ repository blindly.
 ## Where to make a change
 
 The task-routing table in [`.agents/change-map.md`](.agents/change-map.md) is the
-single repository map for required reading, code entry points, authenticated
-HTTP ingest, Console authentication, operations, and contracts. The complete
+single repository map for required reading, code entry points, operations, and
+contracts. The complete
 crate map and placement rules live in the architecture document. Do not create a
 new crate until it is classified there and in `scripts/check-layers`.
 
 Use the component entry points for a shorter local tour:
 
-- [`edge-node/README.md`](edge-node/README.md) for collection and custody;
+- [`edge-node/README.md`](edge-node/README.md) for the Edge Node;
 - [`edge-node/adapters/README.md`](edge-node/adapters/README.md) for Transport,
-  Driver, and Input Adapter work;
-- [`edge/README.md`](edge/README.md) for raw acceptance, semantics, output, and
-  Console work.
+  Driver, and Input Adapter work.
 
-For a new sensor, first decide whether it can use authenticated HTTP ingest,
-fits the existing direct-I2C adapter, or needs a genuinely new adapter family.
-Do not create a new family merely to add another supported IC.
+For a new sensor, first decide whether it fits the existing direct-I2C adapter or
+needs a genuinely new adapter family. Do not create a new family merely to add
+another supported IC.
 
 ## One issue, one worktree, one pull request
 
@@ -253,34 +243,24 @@ cargo clippy -p <owning-crate> --all-targets -- -D warnings
 # Explicit full-workspace diagnosis, not a routine PR sweep
 scripts/verify.sh --workspace
 
-# Console schema, generated types/assets, and unit tests
-scripts/test-edge-console-frontend.sh
+# Contract fixtures and the consumer side
+node scripts/check-observation-fixtures.mjs
+scripts/test-observation-consumer.sh
 
-# Console operator journey in Chromium
-scripts/test-edge-console-e2e.sh
-
-# MQTT output and PostgreSQL variants
-scripts/test-edge-output.sh
-IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
-scripts/test-edge-postgres.sh
+# End-to-end journey (L1 minimal loop, L2 fault injection)
+scripts/test-journey.sh
 ```
 
-CI runs the lightweight repository checks and the full Rust workspace on every
-pull request; a reported local pass does not substitute for it. Use
-`scripts/verify.sh --workspace` for an explicit cross-workspace diagnosis.
+CI runs the lightweight repository checks, the full Rust workspace, and the
+journey on every pull request; a reported local pass does not substitute for it.
+Use `scripts/verify.sh --workspace` for an explicit cross-workspace diagnosis.
 Documentation-only changes normally need the documentation checker, link/command
-inspection, and `git diff --check`. Run
-`scripts/test-edge-host-release-gate.sh` once for a release candidate of the
-current product, not for every pull request. Which tests to write, and which
-end-to-end test is the acceptance evidence, is defined in
+inspection, and `git diff --check`. Which tests to write, and which end-to-end
+test is the acceptance evidence, is defined in
 [`.agents/testing.md`](.agents/testing.md).
 
 ## Generated files and contract changes
 
-- Edit `edge/openapi/edge-console-v1.yaml`, then run
-  `npm run generate:api --prefix edge/frontend`.
-- Build embedded Console JavaScript with
-  `npm run build --prefix edge/frontend`.
 - Update `Cargo.lock` and `package-lock.json` only through their package
   managers.
 - Change Japanese and English files under `docs/product/` together and bump the
@@ -296,8 +276,7 @@ end-to-end test is the acceptance evidence, is defined in
   delete an unacknowledged original.
 - Route state changes through the owning typed operation dispatcher. Do not add
   direct SQL writes from HTTP, UI, CLI, or adapters.
-- Keep Rust product test implementations outside product `src/` directories
-  and frontend unit tests under `edge/frontend/tests/unit/`.
+- Keep Rust product test implementations outside product `src/` directories.
 - Do not make legacy plans or extracted old code the authority for new behavior.
 
 ## Pull request checklist

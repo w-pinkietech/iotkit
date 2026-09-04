@@ -5,65 +5,72 @@ description: "Starts, reviews, stops, and resets the loopback-only IoTKit trial 
 language: en
 translation_key: operations.trial-profile
 status: draft
-revision: 5
+revision: 6
 ---
 
 # Try IoTKit on this PC
 
-Use this profile to see the real IoTKit collection loop before making field
-deployment decisions. It runs IoTKit Edge Node, a standard Mosquitto Broker, and
-IoTKit Edge on one Linux host. All network listeners are restricted to IPv4
-loopback. The generated sample follows the normal Input Adapter and custody
-contracts; it is not a Console mock or a database seed.
+This profile lets you watch IoTKit publish real Observations before you decide on a
+field installation. It runs the IoTKit Edge Node and a standard Mosquitto Broker on
+one Linux host and limits every network listener to IPv4 loopback. The generated
+samples go through a regular Input Adapter and the pipelines to the topics of the
+[MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md), where
+`mosquitto_sub` subscribes to them. It is not a Console mock or a database seed.
 
-This profile is for evaluation only. It does not configure TLS, backup, physical
-sensors, PostgreSQL, high availability, or a field-ready update process.
+The profile is for evaluation only. TLS, real sensors, and field updates are not
+configured.
 
 ## Requirements
 
 - A supported Linux host with Git and Python 3.14 or later.
 - Docker Engine with the `docker compose` command.
-- Free local TCP ports 8080 and 18883.
+- Local TCP port 18883 free.
 
 ## Start
 
-From a clean repository clone:
+Run from a clean repository clone.
 
 ```bash
 ./scripts/iotkit trial validate
 ./scripts/iotkit trial up
 ```
 
-The first `up` builds the trial image, so it can take several minutes depending
-on the host. If the command is interrupted, run the same `up` again to restart
-initialization.
+The first `up` builds the Edge Node image and takes a few minutes depending on the
+host. If it is interrupted, running the same `up` again redoes the initialization.
+Generated credentials and the database are stored outside the repository under
+`${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial` with owner-only permissions.
 
-At the prompt, choose a trial administrator password of 12 to 128 characters.
-The launcher does not put the password in `iotkit.toml`, command arguments, or
-output. Generated credentials and databases are stored with owner-only
-permissions under `${XDG_DATA_HOME:-$HOME/.local/share}/iotkit/trial`, outside
-the repository.
+After the Edge Node starts, `up` imports these three pipeline definitions. The
+edge-node-id is `trial`.
 
-Open `http://127.0.0.1:8080` and sign in with login ID `admin` and the password
-you chose. The yellow **Trial environment** banner must remain visible.
+| pipeline-id | kind | input |
+|---|---|---|
+| `sample-illuminance` | `measurement` | trial illuminance (triangle wave, 120–200 lx, published on every input) |
+| `sample-contact` | `state` | the trial contact state (square wave) after thresholding |
+| `sample-cycles` | `accumulated-count` | rising edges of the same contact state |
 
-## Shortest review
+## Shortest check
 
-1. On **Overview**, confirm that one Edge Node was detected.
-2. Open **Equipment**, select the Edge Node, and activate it.
-3. Open the trial illuminance sensor and the trial contact-state sensor, and complete any prompted display settings.
-4. On **Sensors**, confirm both series:
-   - illuminance (continuous triangle wave) changes slowly
-   - contact state (square wave) toggles High / Low (`1` / `0`)
-5. Open **Received history** and confirm that rows for both series increase.
+```bash
+./scripts/iotkit trial watch
+```
 
-The trial sample adapter emits both series from the same `trial-sample` instance through
-the normal Input Adapter and custody path. Values are not seeded into the database or
-Console. No extra waveform configuration is required; the two-line `iotkit.toml` enables
-both by default.
+`watch` runs `mosquitto_sub` inside the Broker container with a read-only account and
+prints every message as one line: topic, retain flag, payload. Stop it with Ctrl-C.
+Check the following.
 
-Activation remains explicit because it is part of the real custody contract.
-Stopping and starting the trial does not delete its databases:
+1. Heartbeats with `"value":"online"` and `"faults":[]` arrive on
+   `iotkit/v1/edge-node/trial/status`.
+2. On `.../observation/sample-illuminance/measurement`, `value` rises and falls in steps
+   of 8 and `sequence` increases by one.
+3. On `.../observation/sample-contact/state`, `value` alternates between `true` and `false`.
+4. On `.../observation/sample-cycles/accumulated-count`, `value` starts at `0` and grows
+   by one each time the state becomes `true`.
+5. Running `watch` again first delivers the retained latest value (retain flag `1`),
+   one per topic.
+
+Stopping and restarting does not delete the database; series and sequence continue
+across the restart.
 
 ```bash
 ./scripts/iotkit trial status
@@ -71,37 +78,36 @@ Stopping and starting the trial does not delete its databases:
 ./scripts/iotkit trial up
 ```
 
-`trial down` gives Edge Node a 15-second graceful-stop window. Pending custody
-records remain durable and retry after a later `up`; an unacknowledged record is
-not treated as delivered.
+`trial down` gives the Edge Node a 15-second graceful-stop window. The Edge Node
+publishes an `offline` status with the shutdown time before disconnecting; unsent
+Observations stay in the outbox and arrive on the next `up`.
 
 ## Reset
 
 Reset deletes only the recognized trial state directory and requires an explicit
-data-loss confirmation:
+data-loss confirmation.
 
 ```bash
 ./scripts/iotkit trial reset --confirm-trial-data-loss
 ```
 
-To deploy at a site, stop here and use
-[Installation and recovery](installation-and-recovery.md). Trial state is not
-promoted into a field deployment.
+For a field installation, stop the trial here and continue with
+[Installation and recovery](installation-and-recovery.md). Trial state cannot be
+promoted to a field environment.
 
-## Optional ports
+## Changing the port
 
-The two-line root configuration is sufficient. If the defaults conflict with
-another local process, add only the required settings:
+The two lines at the repository root are enough to start. Add settings only when the
+default port collides with another process.
 
 ```toml
 config_version = 1
 profile = "trial"
 
 [trial]
-console_port = 18080
 broker_port = 18884
 sample_interval_ms = 1000
 ```
 
-`console_bind` and `broker_bind` may be set only to an IPv4 loopback address.
-Unknown keys, versions, profiles, and non-loopback binds are rejected.
+`broker_bind` accepts only IPv4 loopback addresses. Unknown keys, versions, profiles,
+and non-loopback binds are rejected.

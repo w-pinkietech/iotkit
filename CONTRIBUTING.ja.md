@@ -53,14 +53,14 @@ repository rootで`mise install`を実行します。直接`node`、`cargo`、`n
 このshell設定を完了しておいてください。CIも同じ`mise.toml`を`jdx/mise-action`経由で使用します。
 
 - rustfmtとclippyを含むRust 1.98.0
-- Console assetとtest用のNode.js 24、npm
-- trial script用のPython 3.14
-- trial validationとintegration test用のjq 1.8.2
-- integration test用のSQLite 3.53.4
+- `scripts/`以下のrepositoryチェック用のNode.js 24、npm
+- 試用launcherと一気通貫テストのpayload検査用のPython 3.14
+- script用のjq 1.8.2とSQLite 3.53.4
 - Rust test用の`cargo-nextest` 0.9.143
 - Raspberry Pi transport依存の`pkg-config`、`libudev-dev`
 
-統合testのDocker Compose、OpenSSL、`curl`はhost dependencyとして残り、`mise`では
+`scripts/test-journey.sh`と`scripts/test-observation-consumer.sh`が使う`mosquitto`と
+`mosquitto-clients`、試用profileが使うDocker Composeはhost dependencyとして残り、`mise`では
 管理しません。通常の開発loopにRaspberry Piや実センサーは必要ありません。
 
 ```bash
@@ -75,7 +75,7 @@ DebianまたはUbuntuでは、言語以外のpackageを次で導入できます�
 ```bash
 sudo apt-get update
 sudo apt-get install --yes build-essential pkg-config libudev-dev docker.io docker-compose-v2 \
-  openssl curl
+  mosquitto mosquitto-clients
 ```
 
 credential、生成した証明書、local DB、deployment出力directoryをcommitしてはいけません。
@@ -85,7 +85,7 @@ Rust test threadをそれぞれ4に制限します。既存の環境変数が優
 command単位で明示的に上書きできます。
 
 ```bash
-CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p iotkit-edge
+CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 cargo test -p iotkit-edge-node
 ```
 
 ## 最初の60分
@@ -104,43 +104,34 @@ scripts/check-source-layout
 次のようになります。
 
 ```text
-sensor / device
-  -> Rust製IoTKit Edge Node
-  -> MQTT Broker
-  -> Rust製IoTKit Edge
-  -> Output Adapter
-  -> 外部application
+sensor -> Input Adapter -> pipeline -> MQTT Output Adapter -> MQTT Broker -> consumer
+          |<---------------- IoTKit Edge Node（端末1台に1つ）------------------>|
 ```
 
 ### 10〜30分: 各領域でfocused testを一つ動かす
 
 ```bash
-# Edge Node・Input Adapter
+# Input Adapter
 cargo test -p bravepi-mainboard-adapter
 
-# IoTKit Edge・Output Adapter
-cargo test -p iotkit-edge
-cargo test -p iotkit-output-adapter-testkit
+# pipeline、series、Observation / statusのwire形
+cargo test -p iotkit-core-pipeline
 
-# Browser動作と生成済みConsole型
-npm ci --prefix edge/frontend
-npm run check --prefix edge/frontend
+# nodeのcomposition root（設定、MQTT Output Adapterの配線）
+cargo test -p iotkit-edge-node
 ```
 
 ### 30〜45分: 実機なしで製品経路を動かす
 
-次のscriptは使い捨て環境と疑似recordを使います。
+一気通貫テストは2つのバイナリをbuildし、使い捨てのMosquittoを起動し、`trial-sample`
+Input Adapterを付けたnodeを動かして、独立したconsumerで最小ループと障害注入を確認します。
 
 ```bash
-# clean bootstrap、TLS、login、Broker ACL、Edge起動
-scripts/test-edge-bootstrap.sh
-
-# semantic Output Adapter、MQTT PUBACK、通信断、再起動後の収束
-scripts/test-edge-output.sh
+scripts/test-journey.sh
 ```
 
-どちらもDockerへの接続が必要です。production DB、credential、証明書、deployment
-directoryを流用してはいけません。
+`PATH`に`mosquitto`、`mosquitto_pub`、`mosquitto_sub`が必要です。状態は一時directoryに
+作り、配置済みの環境には触れません。
 
 ### 45〜60分: 小さな変更を辿る
 
@@ -152,20 +143,17 @@ directoryを流用してはいけません。
 ## 変更目的から場所を探す
 
 [`.agents/change-map.md`](.agents/change-map.md)のtask-routing表だけを、必読資料、
-code入口、認証付きHTTP ingest、Console認証、運用、契約に関するrepository共通の
-地図とします。完全なcrate mapと配置ruleはArchitectureにあります。新しいcrateは、
+code入口、運用、契約に関するrepository共通の地図とします。完全なcrate mapと配置ruleはArchitectureにあります。新しいcrateは、
 同文書と`scripts/check-layers`へ分類するまで追加しません。
 
 短いcomponent別の入口も用意しています。
 
-- 収集とcustody: [`edge-node/README.ja.md`](edge-node/README.ja.md)
+- Edge Node: [`edge-node/README.ja.md`](edge-node/README.ja.md)
 - Transport、Driver、Input Adapter:
   [`edge-node/adapters/README.ja.md`](edge-node/adapters/README.ja.md)
-- Raw受理、semantic、出力、Console: [`edge/README.ja.md`](edge/README.ja.md)
 
-新しいsensorでは、認証付きHTTP ingestを使えるか、既存direct-I2C Adapterへ
-追加できるか、本当に新しいAdapter familyが必要かを先に判断します。
-対応ICを一つ増やすだけのために新しいfamilyを作りません。
+新しいsensorでは、既存direct-I2C Adapterへ追加できるか、本当に新しいAdapter familyが
+必要かを先に判断します。対応ICを一つ増やすだけのために新しいfamilyを作りません。
 
 ## 1 issue、1 worktree、1 pull request
 
@@ -237,31 +225,22 @@ cargo clippy -p <owning-crate> --all-targets -- -D warnings
 # 明示した場合だけのworkspace全体診断。通常のPR sweepではない
 scripts/verify.sh --workspace
 
-# Console schema・生成型/asset・unit test
-scripts/test-edge-console-frontend.sh
+# 契約のfixtureと受信側
+node scripts/check-observation-fixtures.mjs
+scripts/test-observation-consumer.sh
 
-# Chromium上のConsole operator journey
-scripts/test-edge-console-e2e.sh
-
-# MQTT出力とPostgreSQL variant
-scripts/test-edge-output.sh
-IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
-scripts/test-edge-postgres.sh
+# 一気通貫テスト（L1最小ループ、L2障害注入）
+scripts/test-journey.sh
 ```
 
-CIは各PRで軽量なrepositoryチェックとRust workspace全体を実行します。これが権威ある検証であり、
-localの合格報告で置き換えません。`scripts/verify.sh --workspace`は明示的なcross-workspace診断に
-使います。文書だけの変更は通常、文書checker、linkとcommandの確認、`git diff --check`に絞ります。
-`scripts/test-edge-host-release-gate.sh`はPRごとではなく、現行製品のrelease candidateで一度実行します。
-どのテストを書くか、どの一気通貫テストを受け入れ証拠とするかは
+CIは各PRで軽量なrepositoryチェック、Rust workspace全体、一気通貫テストを実行します。これが
+権威ある検証であり、localの合格報告で置き換えません。`scripts/verify.sh --workspace`は明示的な
+cross-workspace診断に使います。文書だけの変更は通常、文書checker、linkとcommandの確認、
+`git diff --check`に絞ります。どのテストを書くか、どの一気通貫テストを受け入れ証拠とするかは
 [`.agents/testing.md`](.agents/testing.md)に定めます。
 
 ## 生成fileとcontract変更
 
-- `edge/openapi/edge-console-v1.yaml`を編集し、
-  `npm run generate:api --prefix edge/frontend`を実行する。
-- 埋め込みConsole JavaScriptは
-  `npm run build --prefix edge/frontend`で生成する。
 - `Cargo.lock`、`package-lock.json`は各package managerからだけ更新する。
 - `docs/product/`の日英fileは同時に変更し、concept 内容を変えたら共有 `revision` を上げる。
 - `testdata/`の共有JSONは正規contract dataとして扱う。一実装を通すためだけに
@@ -273,8 +252,7 @@ localの合格報告で置き換えません。`scripts/verify.sh --workspace`�
 - 文書上のdurability pointより前にackせず、未ack originalを黙って削除しない。
 - 状態変更は所有componentのtyped operation dispatcherを通す。HTTP、UI、CLI、
   AdapterからSQLへ直接writeする経路を追加しない。
-- Rust製品test本体は製品`src/`外、frontend unit testは
-  `edge/frontend/tests/unit/`へ置く。
+- Rust製品test本体は製品`src/`の外に置く。
 - Legacy planや旧codeを新しい動作の正本にしない。
 
 ## Pull request checklist

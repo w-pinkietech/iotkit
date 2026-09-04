@@ -25,60 +25,6 @@
       ]
     },
     {
-      "id": "edge-node-custody-v1",
-      "authority": [
-        "docs/product/en/contracts/compatibility-policy-v1.md",
-        "docs/product/ja/contracts/compatibility-policy-v1.md",
-        "docs/product/en/contracts/edge-node-custody-v1.md",
-        "docs/product/ja/contracts/edge-node-custody-v1.md"
-      ],
-      "types": [
-        "edge-node/core/publish/src/wire.rs",
-        "edge-node/core/publish/src/activation.rs",
-        "edge-node/core/publish/src/descriptor.rs",
-        "edge/custody-contract/src/lib.rs"
-      ],
-      "schemas": [
-        "edge-node/core/publish/src/wire.rs",
-        "edge-node/core/publish/src/activation.rs",
-        "edge-node/core/publish/src/descriptor.rs"
-      ],
-      "fixtures": [
-        "testdata/egress/v1/record-batch.json",
-        "testdata/egress/v1/record-family-cases.json",
-        "testdata/egress/v1/accepted-through.json",
-        "testdata/egress/v1/status-heartbeat.json",
-        "testdata/egress/v1/activation-request.json",
-        "testdata/egress/v1/activation-result.json",
-        "testdata/egress/v2/descriptor-snapshot.json"
-      ],
-      "tests": [
-        "edge-node/core/publish/tests/egress_v1_fixtures.rs",
-        "edge/custody-contract/tests/fixtures.rs"
-      ]
-    },
-    {
-      "id": "console-json-v1",
-      "authority": [
-        "docs/product/en/contracts/compatibility-policy-v1.md",
-        "docs/product/ja/contracts/compatibility-policy-v1.md"
-      ],
-      "types": [
-        "edge/src/application/semantics.rs",
-        "edge/frontend/src/generated/edge-api.d.ts"
-      ],
-      "schemas": [
-        "edge/openapi/edge-console-v1.yaml"
-      ],
-      "fixtures": [],
-      "tests": [
-        "edge/tests/openapi_contract.rs",
-        "edge/tests/preview_contract.rs",
-        "edge/frontend/tests/unit/api.test.ts",
-        "edge/frontend/tests/unit/preview.test.ts"
-      ]
-    },
-    {
       "id": "input-adapter-v1",
       "authority": [
         "docs/product/en/contracts/compatibility-policy-v1.md",
@@ -101,29 +47,39 @@
       ]
     },
     {
-      "id": "output-adapter-v1",
+      "id": "mqtt-output-adapter-v1",
       "authority": [
         "docs/product/en/contracts/compatibility-policy-v1.md",
         "docs/product/ja/contracts/compatibility-policy-v1.md",
-        "docs/product/en/contracts/output-adapter-v1.md",
-        "docs/product/ja/contracts/output-adapter-v1.md"
+        "docs/product/en/contracts/mqtt-output-adapter-v1.md",
+        "docs/product/ja/contracts/mqtt-output-adapter-v1.md"
       ],
       "types": [
-        "edge/output-adapters/api/src/lib.rs",
-        "edge/output-adapters/generic-mqtt-json-v1/src/lib.rs",
-        "edge/output-adapters/pinikiet-mqtt-v1/src/lib.rs"
+        "edge-node/core/pipeline/src/wire.rs",
+        "edge-node/core/pipeline/src/status.rs"
       ],
       "schemas": [
-        "edge/output-adapters/generic-mqtt-json-v1/src/lib.rs",
-        "edge/output-adapters/pinikiet-mqtt-v1/src/lib.rs"
+        "testdata/observation/v1/observation.schema.json",
+        "testdata/observation/v1/status.schema.json",
+        "testdata/observation/v1/fixture.schema.json"
       ],
       "fixtures": [
-        "testdata/output/v1/iotkit-cumulative-value.json",
-        "testdata/output/v1/pinikiet-production.json"
+        "testdata/observation/v1/observation-measurement.json",
+        "testdata/observation/v1/observation-accumulated-count.json",
+        "testdata/observation/v1/observation-accumulated-count-new-series.json",
+        "testdata/observation/v1/observation-state.json",
+        "testdata/observation/v1/observation-deleted.json",
+        "testdata/observation/v1/status-online.json",
+        "testdata/observation/v1/status-degraded.json",
+        "testdata/observation/v1/status-offline-graceful.json",
+        "testdata/observation/v1/status-offline-will.json"
       ],
       "tests": [
-        "edge/output-adapters/generic-mqtt-json-v1/tests/fixture.rs",
-        "edge/output-adapters/pinikiet-mqtt-v1/tests/fixture.rs"
+        "edge-node/core/pipeline/tests/unit/wire_tests.rs",
+        "edge-node/core/pipeline/tests/unit/status_tests.rs",
+        "scripts/check-observation-fixtures.mjs",
+        "scripts/test-observation-consumer.sh",
+        "scripts/test-journey.sh"
       ]
     }
   ],
@@ -152,42 +108,6 @@
         "edge-node/core/pipeline/tests/unit/engine_tests.rs",
         "edge-node/apps/node/tests/recovery_startup.rs",
         "edge-node/apps/nodectl/tests/cli.rs"
-      ]
-    },
-    {
-      "id": "iotkit-edge-sqlite",
-      "schema_version": 12,
-      "authority": [
-        "docs/product/en/contracts/compatibility-policy-v1.md",
-        "docs/product/ja/contracts/compatibility-policy-v1.md",
-        "docs/product/en/operations/installation-and-recovery.md",
-        "docs/product/ja/operations/installation-and-recovery.md"
-      ],
-      "schema": [
-        "edge/migrations/sqlite"
-      ],
-      "tests": [
-        "edge/tests/schema_upgrade_contract.rs",
-        "edge/tests/backup_contract.rs",
-        "edge/tests/cli_parity_contract.rs"
-      ]
-    },
-    {
-      "id": "iotkit-edge-postgres",
-      "schema_version": 12,
-      "authority": [
-        "docs/product/en/contracts/compatibility-policy-v1.md",
-        "docs/product/ja/contracts/compatibility-policy-v1.md",
-        "docs/product/en/operations/installation-and-recovery.md",
-        "docs/product/ja/operations/installation-and-recovery.md"
-      ],
-      "schema": [
-        "edge/migrations/postgres"
-      ],
-      "tests": [
-        "edge/tests/schema_upgrade_contract.rs",
-        "edge/tests/unit/semantic_output_postgres_tests.rs",
-        "scripts/test-edge-postgres.sh"
       ]
     }
   ]

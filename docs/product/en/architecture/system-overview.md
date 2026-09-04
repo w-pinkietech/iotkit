@@ -5,10 +5,12 @@ description: "Defines the complete runtime architecture, data and custody flows,
 language: en
 translation_key: architecture.system-overview
 status: stable
-revision: 22
+revision: 23
 ---
 
 # Architecture
+
+> **Transitional note (#232 child issue 5).** The central `iotkit-edge` (`edge/`), its custody contract, and the old Output Adapter contract were deleted in #251. The parts of this document that describe IoTKit Edge, custody, and application-facing Output Adapters refer to that deleted layout; the full rewrite for the device-local layout is the last PR of #250. The current publishing path is defined by the [MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md) and the redesign paragraphs in the delivery section below.
 
 IoTKit currently ships the Rust IoTKit Edge Node binary (`iotkit-edge-node`) plus an operator CLI
 (`iotkit-edge-nodectl`), backed by a single SQLite database, and the independently deployable Rust
@@ -33,7 +35,7 @@ makes life worse for one of them, that is a review finding, not a taste issue.
 | **Adapter developers** (Rust) | `edge-node/core/types`, `iotkit-input-adapter-host-api`, `iotkit-input-adapter-testkit`, `iotkit-polling-adapter-runtime`, an existing adapter as template | The adapter boundary is obvious; a new sensor family means a new adapter crate, not core surgery. No knowledge of storage/ledger internals needed. |
 | **Core contributors** (Rust) | `edge-node/core/*`, IoTKit Edge Node, tests | The crate map fits in one screen. Layer rules are machine-checked, not tribal. Each crate has one responsibility; tests read as the executable spec. |
 | **Raw custody implementers** | The **Edge Node custody contract** | Record families, ack rules, and cursor semantics are documented and versioned; no schema surprises. |
-| **Application integrators** (Pinikiet, dashboards, analytics) | The **Output Adapter contract** | They receive application-facing topics and payloads without depending on the raw custody stream. |
+| **Application integrators** (Pinikiet, dashboards, analytics) | The **MQTT Output Adapter contract v1** | They receive Observations and status from a standard MQTT Broker and map them onto their own domain. |
 
 ## IoTKit Edge anatomy — what runs where
 
@@ -56,8 +58,8 @@ result to an application-facing MQTT contract. Applications such as Pinikiet own
 and logic such as products, processes, OEE, alarms, business UI, and notifications. Anything that
 complicates this story needs a strong reason.
 
-The exporter boundary is the versioned
-[Output Adapter contract v1](../contracts/output-adapter-v1.md). An Output Adapter is a deterministic
+The exporter boundary was the versioned Output Adapter contract v1 (deleted in #251; see the
+transitional note above). An Output Adapter was a deterministic
 in-process transformer from a generic IoTKit Edge observation plus route configuration to one exact MQTT
 publication. It never owns Broker connectivity, credentials, durable outbox state, retries, or
 business masters. `pinikiet.mqtt.v1` is the first implementation, not a privileged core path.
@@ -403,21 +405,11 @@ below mechanically (in `verify.sh` and CI).
 | `bravepi-poc` | `edge-node/tools/bravepi-poc` | Hardware proof-of-concept harness for BravePI (dev tool, not shipped). |
 | `iotkit-edge-node` | `edge-node/apps/node` | **Binary.** IoTKit Edge Node composition root: adapter supervision, MQTT exit publisher, retention, health, HTTPS API. |
 | `iotkit-edge-nodectl` | `edge-node/apps/nodectl` | **Binary.** Edge Node operator CLI: ledger, registry, snapshots, targets, tokens (audited; plan-5 commands reuse the `edge-node/core/ops` functions; older mutation paths migrate to R14 in plans 7–8). |
-| `iotkit-edge` | `edge/` | **Binary and library.** Rust composition root for MQTT custody, storage, semantics, Output Adapters, authenticated Console, backup, diagnostics, and operator CLI. |
-| `iotkit-edge-custody-contract` | `edge/custody-contract` | Leaf Rust representation and strict validation of the versioned Edge Node MQTT descriptor, activation, record-batch, and custody acknowledgement wire messages. |
-| `iotkit-output-adapter-api` | `edge/output-adapters/api` | Leaf Rust API for deterministic Observation-to-MQTT transformation and provider-neutral profile setup policy. |
-| `iotkit-output-adapter-testkit` | `edge/output-adapters/testkit` | Dev-only shared descriptor, configuration, publication, and determinism conformance assertions. |
-| `iotkit-output-adapter-example` | `edge/output-adapters/example` | Compile-tested vendor-neutral author example; deliberately absent from the production registry. |
-| `iotkit-output-adapter-generic-mqtt-json-v1` | `edge/output-adapters/generic-mqtt-json-v1` | Built-in generic IoTKit Observation JSON transformer. |
-| `iotkit-output-adapter-pinikiet-mqtt-v1` | `edge/output-adapters/pinikiet-mqtt-v1` | Built-in Pinikiet MQTT contract transformer and profile policy. |
 
 Approved non-crate placement:
 
 | Component | Path | Responsibility (one line) |
 |---|---|---|
-| IoTKit Console browser source | `edge/frontend/src/` | TypeScript browser behavior for the server-rendered Console; it does not own authorization, persistence, or domain state transitions. |
-| IoTKit Console API schema | `edge/openapi/edge-console-v1.yaml` | Browser-facing JSON contract used to generate TypeScript request and response types. HTML form endpoints are not duplicated here. |
-| Wire fixtures | `testdata/egress/v1/`, `testdata/egress/v2/` | Normative JSON examples decoded by Rust conformance tests. Descriptor uses only `v2`; the other current egress messages remain in `v1`. |
 
 ### Layer rules (machine-checked)
 
@@ -513,7 +505,6 @@ Choose the integration boundary before choosing a crate:
 | A new control-plane HTTP API route | `edge-node/apps/node/src/api/` as a thin layer; the logic lives in the owning `edge-node/core/*` crate. |
 | An authenticated measurement-ingress HTTP binding | `iotkit-ingest-http` in the `INGRESS` layer; never place it in the control-plane API module. |
 | A new CLI command | `iotkit-edge-nodectl`, calling `edge-node/core/*` (state changes go through the R14 catalog, audit actor `local_cli`). |
-| IoTKit Edge acceptance, query, sensor semantic mapping, or application-export behavior | `edge/`; communicate through versioned MQTT contracts and shared fixtures, never Edge Node internals. Business masters, production records, OEE, and alarms stay in applications. |
 | Raw bus/pin access | `rpi4b-transport`. |
 | An Edge Node module that has grown its own tables, is needed by both binaries, or holds more than one responsibility | **Graduate it to a new `edge-node/core/<name>` crate.** IoTKit Edge Node is a composition root, not a home for domain logic. |
 
@@ -573,6 +564,5 @@ downgrade" discipline.
 ## Where to go next
 
 - The complete reading path and authority order: [English documentation](../index.md).
-- The Edge Node -> IoTKit Edge custody details: [Edge Node custody contract](../contracts/edge-node-custody-v1.md).
-- The IoTKit Edge -> application boundary: [Output Adapter contract](../contracts/output-adapter-v1.md).
+- The Edge Node -> Broker -> consumer boundary: [MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md).
 - Historical rationale remains outside this public current corpus and is for deep dives only.

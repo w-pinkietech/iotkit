@@ -5,10 +5,12 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 28
+revision: 29
 ---
 
 # IoTKit Edge installation and recovery
+
+> **Transitional note (#232 child issue 5).** The central `iotkit-edge`, `scripts/bootstrap-edge.sh`, and `deploy/compose.edge*.yaml` described here were deleted in #251. The rewrite for the redesigned device (`iotkit-edge-node` + a standard MQTT Broker) and for the "copy the TOML, the SQLite file, and `pipelines.toml`" recovery procedure happens within #250. Until then the [trial profile](trial-profile.md) is the only runnable installation procedure.
 
 This is the operator entry point for one IoTKit Edge deployment. IoTKit does not
 configure routers, DNS, IP address allocation, firewalls, or VPNs.

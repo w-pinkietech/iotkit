@@ -5,10 +5,12 @@ description: "Defines a repeatable capacity regression smoke for embedded SQLite
 language: en
 translation_key: operations.storage-capacity
 status: stable
-revision: 7
+revision: 8
 ---
 
 # IoTKit Edge storage capacity regression smoke
+
+> **Transitional note (#232 child issue 5).** The central `iotkit-edge` and its capacity measurement (`scripts/test-edge-capacity.sh`, the `embedded` / `postgres` profiles) were deleted in #251. Only the "Device-side outbox" section is current; the rewrite of this document happens within #250.
 
 IoTKit does not promise unlimited scale merely because a profile is named `embedded` or `postgres`. Supported scale is determined by reproducible measurements that pin the product version, hardware, payload, rules, retention, and backup and query load.
 

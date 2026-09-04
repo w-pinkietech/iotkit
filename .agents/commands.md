@@ -36,10 +36,8 @@ scripts/test-observation-consumer.sh
 # 20 s after the build. IOTKIT_JOURNEY_BIN_DIR=<dir> skips the cargo build.
 scripts/test-journey.sh
 
-# Current product only, until #232 child issue 5 deletes them with their documents
-scripts/test-edge-console-frontend.sh
-scripts/test-edge-console-e2e.sh
-scripts/test-edge-host-release-gate.sh NEW_REPORT_DIRECTORY
+# Trial profile launcher (docker compose: Edge Node + Mosquitto)
+python3 -m unittest scripts.tests.test_iotkit_trial
 ```
 
 CI runs the lightweight, full Rust, and journey lanes on every PR; there is no

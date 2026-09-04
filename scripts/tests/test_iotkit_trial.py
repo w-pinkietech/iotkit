@@ -25,20 +25,17 @@ class TrialConfigTests(unittest.TestCase):
     def test_two_line_config_uses_safe_defaults(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
 
-        self.assertEqual(config.console_port, 8080)
         self.assertEqual(config.broker_port, 18883)
         self.assertEqual(config.sample_interval_ms, 1000)
-        self.assertEqual(config.console_bind, "127.0.0.1")
         self.assertEqual(config.broker_bind, "127.0.0.1")
 
     def test_optional_trial_settings_are_accepted(self):
         config = self.load(
             'config_version = 1\nprofile = "trial"\n'
-            "[trial]\nconsole_port = 18080\nbroker_port = 18884\n"
+            "[trial]\nbroker_port = 18884\n"
             "sample_interval_ms = 2500\n"
         )
 
-        self.assertEqual(config.console_port, 18080)
         self.assertEqual(config.broker_port, 18884)
         self.assertEqual(config.sample_interval_ms, 2500)
 
@@ -65,29 +62,39 @@ class TrialConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(iotkit_trial.ConfigError, "loopback"):
             self.load(
                 'config_version = 1\nprofile = "trial"\n'
-                '[trial]\nconsole_bind = "0.0.0.0"\n'
+                '[trial]\nbroker_bind = "0.0.0.0"\n'
             )
 
-    def test_identical_ports_are_rejected(self):
-        with self.assertRaisesRegex(iotkit_trial.ConfigError, "must differ"):
+    def test_console_keys_of_the_central_profile_are_rejected(self):
+        with self.assertRaisesRegex(iotkit_trial.ConfigError, "unknown trial key: console_port"):
             self.load(
                 'config_version = 1\nprofile = "trial"\n'
-                "[trial]\nconsole_port = 18080\nbroker_port = 18080\n"
+                "[trial]\nconsole_port = 18080\n"
             )
 
     def test_ipv6_loopback_is_rejected(self):
         with self.assertRaisesRegex(iotkit_trial.ConfigError, "IPv4 loopback"):
             self.load(
                 'config_version = 1\nprofile = "trial"\n'
-                '[trial]\nconsole_bind = "::1"\n'
+                '[trial]\nbroker_bind = "::1"\n'
             )
 
-    def test_short_admin_password_is_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "password"
-            path.write_text("short\n", encoding="utf-8")
-            with self.assertRaisesRegex(iotkit_trial.ConfigError, "12 and 128"):
-                iotkit_trial._read_admin_password(path)
+    def test_generated_pipelines_and_acl_follow_the_output_adapter_contract(self):
+        pipelines = iotkit_trial.render_pipelines_config()
+        self.assertEqual(pipelines.count("[[pipeline]]"), 3)
+        for kind in ("measurement", "state", "accumulated-count"):
+            self.assertIn(f'kind = "{kind}"', pipelines)
+        self.assertIn('adapter = "trial_sample"', pipelines)
+        self.assertIn('measurement_key = "illuminance_lux"', pipelines)
+        self.assertIn('measurement_key = "contact_state"', pipelines)
+
+        acl = iotkit_trial.render_mosquitto_acl()
+        self.assertIn("user trial\n", acl)
+        self.assertIn("topic write iotkit/v1/edge-node/trial/status", acl)
+        self.assertIn("topic write iotkit/v1/edge-node/trial/observation/+/+", acl)
+        self.assertIn("user viewer\n", acl)
+        self.assertIn("topic read iotkit/v1/edge-node/+/observation/+/+", acl)
+        self.assertNotIn("edge-nodes", acl)
 
     def test_generated_node_config_uses_trial_adapter_and_plaintext_local_broker(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
@@ -97,6 +104,8 @@ class TrialConfigTests(unittest.TestCase):
 
         self.assertIn('[edge_node]\nid = "trial"\n', rendered)
         self.assertIn("[output.mqtt]\nenabled = true\n", rendered)
+        self.assertIn('[status]\nheartbeat_interval = "30s"\n', rendered)
+        self.assertIn('export_path = "/data/pipelines.toml"', rendered)
         self.assertNotIn("[exit.mqtt]", rendered)
         self.assertIn('type = "trial-sample"', rendered)
         self.assertIn('source = "trial:sample"', rendered)
@@ -117,6 +126,10 @@ class TrialConfigTests(unittest.TestCase):
         self.assertIn("persistence false", mosquitto)
         self.assertIn("allow_anonymous false", mosquitto)
         self.assertIn("condition: service_healthy", compose)
+        self.assertIn("dockerfile: edge-node/Dockerfile", compose)
+        self.assertNotIn("iotkit-edge\n", compose)
+        self.assertNotIn("CONSOLE", compose)
+        self.assertIn("pipelines-trial.toml", compose)
 
     def test_state_marker_is_exact_and_rejects_configuration_drift(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
@@ -151,7 +164,7 @@ class TrialConfigTests(unittest.TestCase):
     def test_down_and_status_use_marker_config_when_toml_drifts(self):
         stored = self.load(
             'config_version = 1\nprofile = "trial"\n'
-            "[trial]\nconsole_port = 18080\nbroker_port = 18884\n"
+            "[trial]\nbroker_port = 18884\n"
         )
         drifted = self.load('config_version = 1\nprofile = "trial"\n')
         with tempfile.TemporaryDirectory() as directory:
@@ -183,13 +196,13 @@ class TrialConfigTests(unittest.TestCase):
                 Path(args[args.index("--env-file") + 1]).read_text(encoding="utf-8")
                 for args in observed
             ]
-            self.assertTrue(all("IOTKIT_TRIAL_CONSOLE_PORT=18080" in text for text in env_files))
             self.assertTrue(all("IOTKIT_TRIAL_BROKER_PORT=18884" in text for text in env_files))
+            self.assertFalse(any("CONSOLE" in text for text in env_files))
 
     def test_incomplete_state_is_recoverable_after_toml_drift(self):
         stored = self.load(
             'config_version = 1\nprofile = "trial"\n'
-            "[trial]\nconsole_port = 18080\nbroker_port = 18884\n"
+            "[trial]\nbroker_port = 18884\n"
         )
         drifted = self.load('config_version = 1\nprofile = "trial"\n')
         with tempfile.TemporaryDirectory() as directory:
@@ -232,21 +245,16 @@ class TrialConfigTests(unittest.TestCase):
             with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
                 with mock.patch.object(iotkit_trial, "_require_tools"):
                     with mock.patch.object(
-                        iotkit_trial, "_read_admin_password", return_value="x" * 12
+                        iotkit_trial, "_initialize", side_effect=initialize
                     ):
                         with mock.patch.object(
-                            iotkit_trial, "_initialize", side_effect=initialize
+                            iotkit_trial,
+                            "_remove_incomplete_state",
+                            side_effect=cleanup,
                         ):
-                            with mock.patch.object(
-                                iotkit_trial,
-                                "_remove_incomplete_state",
-                                side_effect=cleanup,
-                            ):
-                                with mock.patch("builtins.print"):
-                                    with self.assertRaises(RuntimeError) as raised:
-                                        iotkit_trial.command_up(
-                                            REPO_ROOT, state, config, None
-                                        )
+                            with mock.patch("builtins.print"):
+                                with self.assertRaises(RuntimeError) as raised:
+                                    iotkit_trial.command_up(REPO_ROOT, state, config)
             self.assertIs(raised.exception, original)
 
     def test_corrupt_state_marker_is_rejected(self):
@@ -299,12 +307,12 @@ class TrialConfigTests(unittest.TestCase):
                     iotkit_trial._is_recognized_incomplete_state(state, config)
                 )
 
-    def test_incomplete_cleanup_ignores_a_partial_runtime_file(self):
+    def test_incomplete_cleanup_ignores_leftover_files(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "iotkit" / "trial"
             state.mkdir(parents=True)
-            (state / "runtime.json").write_text('{"edge_id":', encoding="utf-8")
+            (state / "leftover.json").write_text('{"partial":', encoding="utf-8")
             observed_environment = []
 
             def record_environment(*_args, **_kwargs):
@@ -317,17 +325,14 @@ class TrialConfigTests(unittest.TestCase):
                 iotkit_trial._remove_incomplete_state(REPO_ROOT, state, config)
 
             self.assertFalse(state.exists())
-            self.assertIn(
-                "IOTKIT_TRIAL_EDGE_NODE_ID=edge-node-pending",
-                observed_environment[0],
-            )
+            self.assertIn("IOTKIT_TRIAL_BROKER_PORT=18883", observed_environment[0])
 
     def test_incomplete_cleanup_keeps_state_when_compose_down_fails(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "iotkit" / "trial"
             state.mkdir(parents=True)
-            (state / "runtime.json").write_text('{"edge_id":', encoding="utf-8")
+            (state / "leftover.json").write_text('{"partial":', encoding="utf-8")
             failure = subprocess.CalledProcessError(1, ["docker", "compose", "down"])
 
             with mock.patch("subprocess.run", side_effect=failure):
@@ -335,7 +340,7 @@ class TrialConfigTests(unittest.TestCase):
                     iotkit_trial._remove_incomplete_state(REPO_ROOT, state, config)
 
             self.assertTrue(state.exists())
-            self.assertTrue((state / "runtime.json").exists())
+            self.assertTrue((state / "leftover.json").exists())
 
     def test_reset_requires_confirmation_before_state_checks(self):
         config = self.load('config_version = 1\nprofile = "trial"\n')
@@ -382,6 +387,56 @@ class TrialConfigTests(unittest.TestCase):
             self.assertFalse(state.exists())
             printed.assert_called_with("試用環境のデータを削除しました。")
             run.assert_called_once()
+
+    def test_pipeline_import_retries_until_the_node_has_started_and_runs_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            attempts = []
+
+            def run(args, **_kwargs):
+                attempts.append(list(args))
+                if len(attempts) < 3:
+                    return subprocess.CompletedProcess(
+                        args, 1, stdout="", stderr="edge-node-id is not recorded"
+                    )
+                return subprocess.CompletedProcess(args, 0, stdout="{}", stderr="")
+
+            with mock.patch("subprocess.run", side_effect=run):
+                with mock.patch("time.sleep"):
+                    iotkit_trial._import_pipelines_once(["docker", "compose"], state)
+                    iotkit_trial._import_pipelines_once(["docker", "compose"], state)
+
+            self.assertEqual(len(attempts), 3, "the marker prevents a second import")
+            self.assertIn("iotkit-edge-nodectl", attempts[0])
+            self.assertIn("--replace-all", attempts[0])
+            self.assertTrue((state / "pipelines-imported.json").exists())
+
+    def test_watch_subscribes_with_the_read_only_viewer_account(self):
+        config = self.load('config_version = 1\nprofile = "trial"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "iotkit" / "trial"
+            (state / "secrets").mkdir(parents=True)
+            (state / "secrets" / "viewer-mqtt-password").write_text("pw\n", encoding="utf-8")
+            (state / "trial-state.json").write_text(
+                json.dumps(
+                    {
+                        "format": 1,
+                        "profile": "trial",
+                        "project": iotkit_trial._compose_project(state),
+                        "config": config.normalized(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(iotkit_trial, "_state_dir", return_value=state):
+                with mock.patch("subprocess.run") as run:
+                    with mock.patch("builtins.print"):
+                        iotkit_trial.command_watch(REPO_ROOT, state, config)
+            args = run.call_args.args[0]
+            self.assertIn("mosquitto_sub", args)
+            self.assertEqual(args[args.index("-u") + 1], "viewer")
+            self.assertEqual(args[args.index("-P") + 1], "pw")
+            self.assertIn("iotkit/v1/edge-node/+/observation/+/+", args)
 
 
 if __name__ == "__main__":

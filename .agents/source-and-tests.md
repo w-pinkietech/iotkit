@@ -6,7 +6,6 @@
   tests live under `<crate>/tests/*.rs`.
 - Test constructors, clocks, fixtures, mocks, and observation helpers live in
   `tests/support/` or a dedicated testkit.
-- Frontend unit tests live under `edge/frontend/tests/unit/`, not `src/`.
 - `scripts/check-source-layout` enforces these boundaries.
 
 Return to [`AGENTS.md`](../AGENTS.md).

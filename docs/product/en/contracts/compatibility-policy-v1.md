@@ -5,10 +5,12 @@ description: "Defines product-1.x compatibility commitments, independent version
 language: en
 translation_key: contracts.compatibility-policy-v1
 status: stable
-revision: 4
+revision: 5
 ---
 
 # IoTKit v1 compatibility policy
+
+> **Transitional note (#232 child issue 5).** This policy takes effect only at product 1.0.0. The central `iotkit-edge`, the custody contract, the old Output Adapter contract, and the Console JSON were deleted in #251. Rows that mention them refer to the deleted layout; the rewrite for the device-local layout is the last PR of #250.
 
 Status: **normative when the product reaches 1.0.0**. It defines the
 compatibility promise for product major version 1; it does not retroactively
@@ -33,11 +35,8 @@ change any of them, and a change to one does not silently change another.
 | Domain | Version unit | Public authority and evidence |
 | --- | --- | --- |
 | Device ingest | `/api/v1` and the JSON `Envelope` / `EnvelopeAck` contract | `ingest-v1.md`, `iotkit-ingest-contract`, its fixtures and tests |
-| Edge Node custody | MQTT topic major `iotkit/v1` plus each payload `schema_version` | `edge-node-custody-v1.md`, publisher/receiver types, fixtures, and tests |
-| Descriptor snapshot | Its payload `schema_version` | The v1 topic currently carries descriptor body schema 2; topic and body versions are independent |
-| Console JSON | `edge/openapi/edge-console-v1.yaml` | The OpenAPI-described operations and their generated browser types |
 | Input Adapter | `adapter_api_major` and `config_schema_version` | `input-adapter-v1.md` and the compile-time host API |
-| Output Adapter | Versioned Adapter ID, configuration schema, and payload schema | `output-adapter-v1.md`, including `iotkit.mqtt-json.v1` and `pinikiet.mqtt.v1` |
+| MQTT Output Adapter | MQTT topic major `iotkit/v1` plus the payload field set | `mqtt-output-adapter-v1.md`, the schemas and fixtures under `testdata/observation/v1`, producer and consumer conformance tests |
 | Persistent storage | Per-store migration/schema number | Node SQLite, IoTKit Edge SQLite, and IoTKit Edge PostgreSQL evidence in the release manifest |
 
 The manifest is an index, not a second contract authority. A disagreement
@@ -51,8 +50,6 @@ For product 1.x, these are public compatibility surfaces:
 - authenticated HTTP ingest at `/api/v1`;
 - the Edge Node MQTT custody v1 topics and exact supported payload schemas,
   including the independently versioned descriptor body schema;
-- only the Console JSON operations and schemas described by
-  `edge/openapi/edge-console-v1.yaml`;
 - Input Adapter API major 1 and its stated configuration schemas; and
 - versioned Output Adapter IDs, route configurations, and payloads.
 
@@ -114,8 +111,6 @@ future version.
 | Existing Edge Node emitting a supported custody v1 payload → newer 1.x IoTKit Edge | Supported. |
 | Newer Edge Node → older IoTKit Edge | Not guaranteed. Upgrade IoTKit Edge first, then Edge Nodes. |
 | Existing v1 Output Adapter consumer → newer 1.x IoTKit Edge | Supported for the same versioned Adapter ID and exact payload contract. |
-| Existing Console JSON v1 API client → newer 1.x IoTKit Edge | Supported for the OpenAPI-described public subset. |
-| Browser assets from an older Console → newer IoTKit Edge | Not supported. Console assets are a matched, no-store same-release surface. |
 | Older `nodectl` or direct database access → newer Node schema | Not supported. Use the matching release's tooling; direct database mutation is never a compatibility path. |
 | Input Adapter compiled for API major 1 → newer Edge Node | Its supported source/configuration contract remains v1, but adapters rebuild with the Edge Node release. |
 
