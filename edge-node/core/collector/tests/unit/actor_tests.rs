@@ -2188,6 +2188,13 @@ async fn oversized_envelope_is_rejected_whole() {
 
 // ── pipeline delivery (#232 child issue 3) ──────────────────
 
+fn test_time() -> iotkit_core_pipeline::InputTime {
+    iotkit_core_pipeline::InputTime {
+        uptime_ms: 0,
+        unix_epoch_ms: None,
+    }
+}
+
 fn pipeline_delivery(faults: iotkit_core_pipeline::PipelineFaults) -> Arc<PipelineDelivery> {
     let engine = iotkit_core_pipeline::PipelineEngine::new("rpi1".parse().unwrap());
     let mut delivery = PipelineDelivery::new(engine, faults);
@@ -2257,7 +2264,7 @@ fn durable_readings_reach_matching_pipelines_in_the_accept_transaction() {
             .create(
                 conn,
                 &count_pipeline("press-01", "line_a", "contact_state"),
-                0,
+                test_time(),
             )
             .unwrap();
         pipelines
@@ -2265,7 +2272,7 @@ fn durable_readings_reach_matching_pipelines_in_the_accept_transaction() {
             .create(
                 conn,
                 &count_pipeline("other-adapter", "line_b", "contact_state"),
-                0,
+                test_time(),
             )
             .unwrap();
         assert_eq!(iotkit_core_pipeline::outbox::count(conn).unwrap(), 2);
@@ -2316,7 +2323,7 @@ fn readings_from_unregistered_principals_and_unmatched_inputs_skip_pipelines() {
             .create(
                 conn,
                 &count_pipeline("press-01", "line_a", "contact_state"),
-                0,
+                test_time(),
             )
             .unwrap();
         let mut cache = ResolutionCache::default();
@@ -2351,7 +2358,10 @@ fn a_pipeline_that_discards_an_input_is_recorded_without_failing_the_envelope() 
     db.with_conn_sync(|conn| {
         let mut definition = count_pipeline("press-01", "line_a", "contact_state");
         definition.input.value_index = 3;
-        pipelines.engine().create(conn, &definition, 0).unwrap();
+        pipelines
+            .engine()
+            .create(conn, &definition, test_time())
+            .unwrap();
         let mut cache = ResolutionCache::default();
         let ack = process_with_pipelines(
             conn,

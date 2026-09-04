@@ -1474,6 +1474,7 @@ version = "0.4.0"
 dependencies = [
  "iotkit-core-storage",
  "iotkit-core-types",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

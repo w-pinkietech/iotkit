@@ -10,6 +10,7 @@ use iotkit_core_types::PipelineId;
 pub struct FaultRecord {
     pub discarded: u64,
     pub last_error: String,
+    /// `uptime_ms` of the last discarded input.
     pub last_at: i64,
 }
 

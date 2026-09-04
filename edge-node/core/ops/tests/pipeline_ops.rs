@@ -1,7 +1,7 @@
 use iotkit_core_ops::{
     Actor, ActorKind, DispatchRequest, OpError, Tier, dispatch, standard_catalog,
 };
-use iotkit_core_pipeline::{PipelineEngine, outbox, store};
+use iotkit_core_pipeline::{InputTime, PipelineEngine, outbox, store};
 use iotkit_core_storage::Migration;
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -62,7 +62,7 @@ fn count_definition(id: &str) -> Value {
 
 fn recorded_node(conn: &Connection) {
     PipelineEngine::new("rpi1".parse().unwrap())
-        .reconcile(conn, 0)
+        .reconcile(conn, InputTime::now(None))
         .unwrap();
 }
 

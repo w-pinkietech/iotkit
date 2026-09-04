@@ -30,10 +30,11 @@ CREATE TABLE pipeline_state (
     counter          INTEGER NOT NULL,
     pending          INTEGER NOT NULL,
     pending_active   INTEGER NOT NULL,
-    pending_since    INTEGER NOT NULL,
+    pending_since    INTEGER NOT NULL,   -- uptime_ms of the input that opened the debounce window
     last_value_json  TEXT,
-    last_timestamp   INTEGER,
-    updated_at       INTEGER NOT NULL
+    last_uptime_ms   INTEGER,            -- uptime_ms of the last publication
+    last_unix_epoch_ms INTEGER,          -- its wall-clock time, NULL while untrusted
+    updated_at       INTEGER NOT NULL    -- uptime_ms of the last write
 );
 
 -- observation_outbox: publications not yet acknowledged by the Broker. Rows
@@ -41,12 +42,13 @@ CREATE TABLE pipeline_state (
 -- MQTT Output Adapter after PUBACK. topic and payload are fixed at insert so a
 -- retransmission sends identical bytes.
 CREATE TABLE observation_outbox (
-    outbox_seq  INTEGER PRIMARY KEY AUTOINCREMENT,
-    pipeline_id TEXT    NOT NULL,
-    topic       TEXT    NOT NULL,
-    payload     BLOB    NOT NULL,
-    retain      INTEGER NOT NULL,
-    created_at  INTEGER NOT NULL
+    outbox_seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_id           TEXT    NOT NULL,
+    topic                 TEXT    NOT NULL,
+    payload               BLOB    NOT NULL,
+    retain                INTEGER NOT NULL,
+    created_uptime_ms     INTEGER NOT NULL,
+    created_unix_epoch_ms INTEGER
 );
 
 -- pipeline_meta: the edge-node-id the node last started with, recorded at

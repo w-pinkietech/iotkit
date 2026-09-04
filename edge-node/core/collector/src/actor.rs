@@ -980,7 +980,10 @@ fn process_item(
     // Device-local pipelines see every durable reading in the same transaction
     // (#232). Quarantined readings are not observations.
     if !row_quarantined && let Some(pipelines) = context.pipelines {
-        pipelines.deliver(conn, principal, item, context.received_at)?;
+        // uptime comes from the monotonic clock at delivery; the wall clock is
+        // only attached while the receiver-owned clock evidence trusts it.
+        let received_at = iotkit_core_pipeline::InputTime::now(context.clock.trusted_wall_time_ms);
+        pipelines.deliver(conn, principal, item, received_at)?;
     }
     if !row_quarantined
         && iotkit_core_publish::activation::publication_admitted(conn).map_err(|e| e.to_string())?

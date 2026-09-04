@@ -5,7 +5,7 @@ description: "IoTKitの完全な製品範囲、component責務、権威の流れ
 language: ja
 translation_key: concepts.product-model
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit製品モデル

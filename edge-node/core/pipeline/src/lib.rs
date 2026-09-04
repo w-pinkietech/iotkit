@@ -38,7 +38,7 @@ pub use export::{
 pub use faults::{FaultRecord, PipelineFaults};
 pub use outbox::OutboxRow;
 pub use store::{PipelineState, StoreError};
-pub use wire::{Observation, ObservationValue};
+pub use wire::{InputTime, Observation, ObservationValue, uptime_ms};
 
 pub const MIGRATIONS: &[Migration] = &[Migration {
     version: 25,

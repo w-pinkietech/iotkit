@@ -11,7 +11,7 @@ use crate::definition::{PipelineDefinition, PipelineKind, ValidationError};
 use crate::evaluator::{self, EvaluationState, EvaluatorError};
 use crate::outbox;
 use crate::store::{self, PipelineState, StoreError};
-use crate::wire::{Observation, ObservationValue, observation_topic};
+use crate::wire::{InputTime, Observation, ObservationValue, observation_topic};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -51,8 +51,8 @@ pub struct AcceptedReading<'a> {
     pub measurement_key: &'a str,
     pub channel_index: Option<u16>,
     pub values: &'a [f64],
-    /// Unix epoch ms at which the device received the input.
-    pub received_at: i64,
+    /// When the device received the input.
+    pub received_at: InputTime,
 }
 
 /// The result of delivering one reading to one matching pipeline.
@@ -92,13 +92,13 @@ impl PipelineEngine {
         &self,
         conn: &Connection,
         definition: &PipelineDefinition,
-        now: i64,
+        now: InputTime,
     ) -> Result<SeriesStart, EngineError> {
         definition.validate()?;
         if store::get_definition(conn, &definition.id)?.is_some() {
             return Err(EngineError::AlreadyExists(definition.id.to_string()));
         }
-        store::insert_definition(conn, definition, now)?;
+        store::insert_definition(conn, definition, now.uptime_ms)?;
         self.start_series(conn, definition, now)
     }
 
@@ -108,7 +108,7 @@ impl PipelineEngine {
         &self,
         conn: &Connection,
         definition: &PipelineDefinition,
-        now: i64,
+        now: InputTime,
     ) -> Result<Option<SeriesStart>, EngineError> {
         definition.validate()?;
         let existing = store::get_definition(conn, &definition.id)?
@@ -116,7 +116,7 @@ impl PipelineEngine {
         if existing.kind != definition.kind {
             return Err(EngineError::KindChanged);
         }
-        store::update_definition(conn, definition, now)?;
+        store::update_definition(conn, definition, now.uptime_ms)?;
         let state = store::get_state(conn, &definition.id)?;
         match state {
             Some(state) if state.structural_hash == definition.structural_hash() => Ok(None),
@@ -125,7 +125,12 @@ impl PipelineEngine {
     }
 
     /// Deletes a definition and enqueues the retained-value clear for its topic.
-    pub fn delete(&self, conn: &Connection, id: &PipelineId, now: i64) -> Result<(), EngineError> {
+    pub fn delete(
+        &self,
+        conn: &Connection,
+        id: &PipelineId,
+        now: InputTime,
+    ) -> Result<(), EngineError> {
         let definition = store::get_definition(conn, id)?
             .ok_or_else(|| EngineError::NotFound(id.to_string()))?;
         store::delete_definition(conn, id)?;
@@ -138,7 +143,7 @@ impl PipelineEngine {
         &self,
         conn: &Connection,
         id: &PipelineId,
-        now: i64,
+        now: InputTime,
     ) -> Result<SeriesStart, EngineError> {
         let definition = store::get_definition(conn, id)?
             .ok_or_else(|| EngineError::NotFound(id.to_string()))?;
@@ -151,7 +156,7 @@ impl PipelineEngine {
         &self,
         conn: &Connection,
         definitions: &[PipelineDefinition],
-        now: i64,
+        now: InputTime,
     ) -> Result<Vec<SeriesStart>, EngineError> {
         for definition in definitions {
             definition.validate()?;
@@ -174,7 +179,7 @@ impl PipelineEngine {
         }
         let mut started = Vec::with_capacity(definitions.len());
         for definition in definitions {
-            store::insert_definition(conn, definition, now)?;
+            store::insert_definition(conn, definition, now.uptime_ms)?;
             started.push(self.start_series(conn, definition, now)?);
         }
         Ok(started)
@@ -182,7 +187,11 @@ impl PipelineEngine {
 
     /// Startup reconciliation: a pipeline without state, or whose state was
     /// started under a different structural hash, starts a new series.
-    pub fn reconcile(&self, conn: &Connection, now: i64) -> Result<Vec<SeriesStart>, EngineError> {
+    pub fn reconcile(
+        &self,
+        conn: &Connection,
+        now: InputTime,
+    ) -> Result<Vec<SeriesStart>, EngineError> {
         store::put_edge_node_id(conn, &self.edge_node_id)?;
         let mut started = Vec::new();
         for definition in store::list_definitions(conn)? {
@@ -237,7 +246,7 @@ impl PipelineEngine {
         conn: &Connection,
         definition: &PipelineDefinition,
         input: f64,
-        received_at: i64,
+        received_at: InputTime,
     ) -> Result<DeliveryOutcome, EngineError> {
         let mut state = match store::get_state(conn, &definition.id)? {
             Some(state) if state.structural_hash == definition.structural_hash() => state,
@@ -249,8 +258,10 @@ impl PipelineEngine {
                     .ok_or_else(|| EngineError::NotFound(definition.id.to_string()))?
             }
         };
+        // Debounce runs on the monotonic clock so a wall-clock correction
+        // cannot lengthen or shorten a window.
         let (evaluation, next_evaluation) =
-            evaluator::evaluate(definition, state.evaluation, input, received_at)?;
+            evaluator::evaluate(definition, state.evaluation, input, received_at.uptime_ms)?;
         state.evaluation = next_evaluation;
 
         let value = if !evaluation.emitted {
@@ -279,7 +290,7 @@ impl PipelineEngine {
                 DeliveryOutcome::Published(observation)
             }
         };
-        store::put_state(conn, &definition.id, &state, received_at)?;
+        store::put_state(conn, &definition.id, &state, received_at.uptime_ms)?;
         Ok(outcome)
     }
 
@@ -287,7 +298,7 @@ impl PipelineEngine {
         &self,
         conn: &Connection,
         definition: &PipelineDefinition,
-        now: i64,
+        now: InputTime,
     ) -> Result<SeriesStart, EngineError> {
         let mut state = PipelineState {
             structural_hash: definition.structural_hash(),
@@ -295,7 +306,7 @@ impl PipelineEngine {
             next_sequence: 1,
             evaluation: EvaluationState::default(),
             last_value: None,
-            last_timestamp: None,
+            last_published_at: None,
         };
         let published = if definition.kind == PipelineKind::AccumulatedCount {
             Some(self.publish(
@@ -308,7 +319,7 @@ impl PipelineEngine {
         } else {
             None
         };
-        store::put_state(conn, &definition.id, &state, now)?;
+        store::put_state(conn, &definition.id, &state, now.uptime_ms)?;
         Ok(SeriesStart {
             pipeline_id: definition.id.clone(),
             series_id: state.series_id,
@@ -323,13 +334,13 @@ impl PipelineEngine {
         definition: &PipelineDefinition,
         state: &mut PipelineState,
         value: ObservationValue,
-        timestamp: i64,
+        at: InputTime,
     ) -> Result<Observation, EngineError> {
         let observation = Observation {
             pipeline_id: definition.id.clone(),
             series_id: state.series_id.clone(),
             sequence: state.next_sequence,
-            timestamp,
+            at,
             value,
         };
         outbox::enqueue(
@@ -338,11 +349,11 @@ impl PipelineEngine {
             &observation.topic(&self.edge_node_id),
             &observation.payload(),
             true,
-            timestamp,
+            at,
         )?;
         state.next_sequence += 1;
         state.last_value = Some(value);
-        state.last_timestamp = Some(timestamp);
+        state.last_published_at = Some(at);
         Ok(observation)
     }
 
@@ -350,7 +361,7 @@ impl PipelineEngine {
         &self,
         conn: &Connection,
         definition: &PipelineDefinition,
-        now: i64,
+        now: InputTime,
     ) -> Result<(), EngineError> {
         let topic = observation_topic(&self.edge_node_id, &definition.id, definition.kind);
         outbox::enqueue(conn, &definition.id, &topic, &[], true, now)?;

@@ -4,7 +4,9 @@
 //! operations. Each execute runs inside the dispatcher's transaction, so the
 //! definition, the series state, and the outbox rows commit together.
 
-use iotkit_core_pipeline::{EngineError, PipelineDefinition, PipelineEngine, SeriesStart};
+use iotkit_core_pipeline::{
+    EngineError, InputTime, PipelineDefinition, PipelineEngine, SeriesStart,
+};
 use iotkit_core_types::PipelineId;
 use rusqlite::Transaction;
 use serde_json::{Value, json};
@@ -199,7 +201,7 @@ fn create_dry_run(_tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, O
 fn create_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
     let definition = definition(ctx.params)?;
     let start = engine(tx)?
-        .create(tx, &definition, now_ms())
+        .create(tx, &definition, now())
         .map_err(engine_error)?;
     Ok(series_json(&start))
 }
@@ -236,7 +238,7 @@ fn update_dry_run(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, Op
 fn update_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
     let definition = definition(ctx.params)?;
     let started = engine(tx)?
-        .update(tx, &definition, now_ms())
+        .update(tx, &definition, now())
         .map_err(engine_error)?;
     Ok(json!({
         "id": definition.id.to_string(),
@@ -255,15 +257,13 @@ fn existing_preconditions(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(
 
 fn delete_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
     let id = required_id(ctx.params)?;
-    engine(tx)?
-        .delete(tx, &id, now_ms())
-        .map_err(engine_error)?;
+    engine(tx)?.delete(tx, &id, now()).map_err(engine_error)?;
     Ok(json!({ "id": id.to_string(), "deleted": true }))
 }
 
 fn reset_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
     let id = required_id(ctx.params)?;
-    let start = engine(tx)?.reset(tx, &id, now_ms()).map_err(engine_error)?;
+    let start = engine(tx)?.reset(tx, &id, now()).map_err(engine_error)?;
     Ok(series_json(&start))
 }
 
@@ -276,7 +276,7 @@ fn import_preconditions(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<(),
 fn import_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, OpError> {
     let definitions = definitions(ctx.params)?;
     let started = engine(tx)?
-        .import(tx, &definitions, now_ms())
+        .import(tx, &definitions, now())
         .map_err(engine_error)?;
     Ok(json!({
         "imported": started.len(),
@@ -284,9 +284,8 @@ fn import_execute(tx: &Transaction<'_>, ctx: &OpContext<'_>) -> Result<Value, Op
     }))
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as i64)
-        .unwrap_or(0)
+/// Operations run from the Console or nodectl carry no clock-trust evidence,
+/// so the wall clock of the publications they cause is unknown (null).
+fn now() -> InputTime {
+    InputTime::now(None)
 }

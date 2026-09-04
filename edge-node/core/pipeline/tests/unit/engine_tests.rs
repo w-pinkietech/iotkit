@@ -16,6 +16,14 @@ fn engine() -> PipelineEngine {
     PipelineEngine::new("rpi1".parse().unwrap())
 }
 
+/// Test time: uptime plus a trusted wall clock derived from it.
+fn at(uptime_ms: i64) -> InputTime {
+    InputTime {
+        uptime_ms,
+        unix_epoch_ms: Some(1_784_190_000_000 + uptime_ms),
+    }
+}
+
 fn with<T>(db: &DbHandle, f: impl FnOnce(&Connection) -> T) -> T {
     db.with_conn_sync(|conn| Ok(f(conn))).unwrap()
 }
@@ -45,13 +53,15 @@ fn state_definition() -> PipelineDefinition {
 fn creating_an_accumulated_count_publishes_sequence_one_value_zero_immediately() {
     let db = open();
     with(&db, |conn| {
-        let start = engine().create(conn, &count_definition(), 1_000).unwrap();
+        let start = engine()
+            .create(conn, &count_definition(), at(1_000))
+            .unwrap();
         let published = start
             .published
             .expect("accumulated-count publishes at series start");
         assert_eq!(published.sequence, 1);
         assert_eq!(published.value, ObservationValue::AccumulatedCount(0));
-        assert_eq!(published.timestamp, 1_000);
+        assert_eq!(published.at, at(1_000));
         assert_eq!(published.series_id, start.series_id);
 
         let rows = outbox::all(conn).unwrap();
@@ -82,14 +92,14 @@ fn measurement_and_state_publish_nothing_at_series_start() {
         let engine = engine();
         assert!(
             engine
-                .create(conn, &measurement_definition(), 0)
+                .create(conn, &measurement_definition(), at(0))
                 .unwrap()
                 .published
                 .is_none()
         );
         assert!(
             engine
-                .create(conn, &state_definition(), 0)
+                .create(conn, &state_definition(), at(0))
                 .unwrap()
                 .published
                 .is_none()
@@ -110,17 +120,17 @@ fn creating_twice_or_updating_a_missing_pipeline_fails() {
     let db = open();
     with(&db, |conn| {
         let engine = engine();
-        engine.create(conn, &count_definition(), 0).unwrap();
+        engine.create(conn, &count_definition(), at(0)).unwrap();
         assert!(matches!(
-            engine.create(conn, &count_definition(), 0),
+            engine.create(conn, &count_definition(), at(0)),
             Err(EngineError::AlreadyExists(_))
         ));
         assert!(matches!(
-            engine.update(conn, &measurement_definition(), 0),
+            engine.update(conn, &measurement_definition(), at(0)),
             Err(EngineError::NotFound(_))
         ));
         assert!(matches!(
-            engine.reset(conn, &measurement_definition().id, 0),
+            engine.reset(conn, &measurement_definition().id, at(0)),
             Err(EngineError::NotFound(_))
         ));
     });
@@ -132,11 +142,11 @@ fn accumulated_count_increments_publish_in_sequence_within_one_series() {
     with(&db, |conn| {
         let engine = engine();
         let definition = count_definition();
-        let start = engine.create(conn, &definition, 0).unwrap();
+        let start = engine.create(conn, &definition, at(0)).unwrap();
         let inputs = [(0.0, 10), (1.0, 20), (1.0, 30), (0.0, 40), (1.0, 50)];
         let mut published = Vec::new();
-        for (value, at) in inputs {
-            match engine.process(conn, &definition, value, at).unwrap() {
+        for (value, at_ms) in inputs {
+            match engine.process(conn, &definition, value, at(at_ms)).unwrap() {
                 DeliveryOutcome::Published(observation) => published.push(observation),
                 DeliveryOutcome::Silent => {}
             }
@@ -144,7 +154,7 @@ fn accumulated_count_increments_publish_in_sequence_within_one_series() {
         assert_eq!(published.len(), 2);
         assert_eq!(published[0].sequence, 2);
         assert_eq!(published[0].value, ObservationValue::AccumulatedCount(1));
-        assert_eq!(published[0].timestamp, 20);
+        assert_eq!(published[0].at, at(20));
         assert_eq!(published[1].sequence, 3);
         assert_eq!(published[1].value, ObservationValue::AccumulatedCount(2));
         assert!(published.iter().all(|o| o.series_id == start.series_id));
@@ -152,7 +162,7 @@ fn accumulated_count_increments_publish_in_sequence_within_one_series() {
         let state = store::get_state(conn, &definition.id).unwrap().unwrap();
         assert_eq!(state.evaluation.counter, 2);
         assert_eq!(state.next_sequence, 4);
-        assert_eq!(state.last_timestamp, Some(50));
+        assert_eq!(state.last_published_at, Some(at(50)));
     });
 }
 
@@ -166,10 +176,10 @@ fn measurement_publishes_only_when_the_calibrated_value_changes() {
             scale: 0.5,
             offset: 0.0,
         };
-        engine.create(conn, &definition, 0).unwrap();
+        engine.create(conn, &definition, at(0)).unwrap();
         let outcomes: Vec<_> = [(48.0, 1), (48.0, 2), (49.0, 3), (49.0, 4), (48.0, 5)]
             .into_iter()
-            .map(|(value, at)| engine.process(conn, &definition, value, at).unwrap())
+            .map(|(value, at_ms)| engine.process(conn, &definition, value, at(at_ms)).unwrap())
             .collect();
         let sequences: Vec<(u64, f64)> = outcomes
             .iter()
@@ -194,18 +204,18 @@ fn state_publishes_the_first_input_and_each_transition() {
     with(&db, |conn| {
         let engine = engine();
         let definition = state_definition();
-        engine.create(conn, &definition, 0).unwrap();
+        engine.create(conn, &definition, at(0)).unwrap();
         let values: Vec<bool> = [(3.0, 1), (5.0, 2), (12.0, 3), (5.0, 4), (3.0, 5)]
             .into_iter()
-            .filter_map(
-                |(value, at)| match engine.process(conn, &definition, value, at).unwrap() {
+            .filter_map(|(value, at_ms)| {
+                match engine.process(conn, &definition, value, at(at_ms)).unwrap() {
                     DeliveryOutcome::Published(Observation {
                         value: ObservationValue::State(v),
                         ..
                     }) => Some(v),
                     _ => None,
-                },
-            )
+                }
+            })
             .collect();
         assert_eq!(values, vec![false, true, false]);
         assert_eq!(payload_json(&outbox::all(conn).unwrap()[1])["value"], true);
@@ -218,9 +228,9 @@ fn tuning_changes_keep_the_series_and_structural_changes_start_a_new_one() {
     with(&db, |conn| {
         let engine = engine();
         let definition = count_definition();
-        let first = engine.create(conn, &definition, 0).unwrap();
-        engine.process(conn, &definition, 0.0, 1).unwrap();
-        engine.process(conn, &definition, 1.0, 2).unwrap();
+        let first = engine.create(conn, &definition, at(0)).unwrap();
+        engine.process(conn, &definition, 0.0, at(1)).unwrap();
+        engine.process(conn, &definition, 1.0, at(2)).unwrap();
 
         let mut tuned = definition.clone();
         tuned.display_name = Some("renamed".into());
@@ -229,7 +239,7 @@ fn tuning_changes_keep_the_series_and_structural_changes_start_a_new_one() {
             fall_threshold: 0.2,
             ..definition.detector.unwrap()
         });
-        assert!(engine.update(conn, &tuned, 3).unwrap().is_none());
+        assert!(engine.update(conn, &tuned, at(3)).unwrap().is_none());
         let state = store::get_state(conn, &definition.id).unwrap().unwrap();
         assert_eq!(state.series_id, first.series_id);
         assert_eq!(state.evaluation.counter, 1);
@@ -243,7 +253,7 @@ fn tuning_changes_keep_the_series_and_structural_changes_start_a_new_one() {
         let mut restructured = tuned.clone();
         restructured.input.channel_index = Some(2);
         let second = engine
-            .update(conn, &restructured, 4)
+            .update(conn, &restructured, at(4))
             .unwrap()
             .expect("new series");
         assert_ne!(second.series_id, first.series_id);
@@ -261,7 +271,7 @@ fn tuning_changes_keep_the_series_and_structural_changes_start_a_new_one() {
         other_kind.kind = PipelineKind::State;
         other_kind.trigger = None;
         assert!(matches!(
-            engine.update(conn, &other_kind, 5),
+            engine.update(conn, &other_kind, at(5)),
             Err(EngineError::KindChanged)
         ));
     });
@@ -273,11 +283,11 @@ fn reset_starts_a_new_series_and_delete_clears_the_retained_value() {
     with(&db, |conn| {
         let engine = engine();
         let definition = count_definition();
-        let first = engine.create(conn, &definition, 0).unwrap();
-        engine.process(conn, &definition, 0.0, 1).unwrap();
-        engine.process(conn, &definition, 1.0, 2).unwrap();
+        let first = engine.create(conn, &definition, at(0)).unwrap();
+        engine.process(conn, &definition, 0.0, at(1)).unwrap();
+        engine.process(conn, &definition, 1.0, at(2)).unwrap();
 
-        let reset = engine.reset(conn, &definition.id, 3).unwrap();
+        let reset = engine.reset(conn, &definition.id, at(3)).unwrap();
         assert_ne!(reset.series_id, first.series_id);
         assert_eq!(
             reset.published.unwrap().value,
@@ -292,7 +302,7 @@ fn reset_starts_a_new_series_and_delete_clears_the_retained_value() {
             0
         );
 
-        engine.delete(conn, &definition.id, 4).unwrap();
+        engine.delete(conn, &definition.id, at(4)).unwrap();
         assert!(
             store::get_definition(conn, &definition.id)
                 .unwrap()
@@ -310,7 +320,7 @@ fn reset_starts_a_new_series_and_delete_clears_the_retained_value() {
         assert!(last.payload.is_empty());
         assert!(last.retain);
         assert!(matches!(
-            engine.delete(conn, &definition.id, 5),
+            engine.delete(conn, &definition.id, at(5)),
             Err(EngineError::NotFound(_))
         ));
     });
@@ -323,10 +333,10 @@ fn reconcile_starts_series_only_where_state_is_missing_or_structurally_stale() {
         let engine = engine();
         let count = count_definition();
         let measurement = measurement_definition();
-        let created = engine.create(conn, &count, 0).unwrap();
-        engine.create(conn, &measurement, 0).unwrap();
+        let created = engine.create(conn, &count, at(0)).unwrap();
+        engine.create(conn, &measurement, at(0)).unwrap();
         assert!(
-            engine.reconcile(conn, 1).unwrap().is_empty(),
+            engine.reconcile(conn, at(1)).unwrap().is_empty(),
             "matching hashes continue"
         );
 
@@ -341,7 +351,7 @@ fn reconcile_starts_series_only_where_state_is_missing_or_structurally_stale() {
         )
         .unwrap();
 
-        let started = engine.reconcile(conn, 3).unwrap();
+        let started = engine.reconcile(conn, at(3)).unwrap();
         let ids: Vec<&str> = started.iter().map(|s| s.pipeline_id.as_str()).collect();
         assert_eq!(ids, vec![count.id.as_str(), measurement.id.as_str()]);
         assert_ne!(started[0].series_id, created.series_id);
@@ -355,13 +365,13 @@ fn reconcile_records_the_edge_node_id_for_tools_without_the_toml() {
     let db = open();
     with(&db, |conn| {
         assert!(PipelineEngine::load(conn).unwrap().is_none());
-        engine().reconcile(conn, 0).unwrap();
+        engine().reconcile(conn, at(0)).unwrap();
         let loaded = PipelineEngine::load(conn)
             .unwrap()
             .expect("recorded at startup");
         assert_eq!(loaded.edge_node_id().as_str(), "rpi1");
         PipelineEngine::new("rpi2".parse().unwrap())
-            .reconcile(conn, 1)
+            .reconcile(conn, at(1))
             .unwrap();
         assert_eq!(
             PipelineEngine::load(conn)
@@ -381,14 +391,14 @@ fn state_and_outbox_commit_or_roll_back_together() {
     with(&db, |conn| {
         let tx =
             rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate).unwrap();
-        engine().create(&tx, &definition, 0).unwrap();
+        engine().create(&tx, &definition, at(0)).unwrap();
         tx.commit().unwrap();
     });
     with(&db, |conn| {
         let tx =
             rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate).unwrap();
-        engine().process(&tx, &definition, 0.0, 1).unwrap();
-        let outcome = engine().process(&tx, &definition, 1.0, 2).unwrap();
+        engine().process(&tx, &definition, 0.0, at(1)).unwrap();
+        let outcome = engine().process(&tx, &definition, 1.0, at(2)).unwrap();
         assert!(matches!(outcome, DeliveryOutcome::Published(_)));
         assert_eq!(outbox::count(&tx).unwrap(), 2);
         tx.rollback().unwrap();
@@ -404,8 +414,8 @@ fn state_and_outbox_commit_or_roll_back_together() {
 
         let tx =
             rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate).unwrap();
-        engine().process(&tx, &definition, 0.0, 1).unwrap();
-        engine().process(&tx, &definition, 1.0, 2).unwrap();
+        engine().process(&tx, &definition, 0.0, at(1)).unwrap();
+        engine().process(&tx, &definition, 1.0, at(2)).unwrap();
         tx.commit().unwrap();
         let state = store::get_state(conn, &definition.id).unwrap().unwrap();
         assert_eq!(state.evaluation.counter, 1);
@@ -420,13 +430,13 @@ fn an_evaluator_error_leaves_state_and_outbox_untouched() {
     with(&db, |conn| {
         let engine = engine();
         let definition = count_definition();
-        engine.create(conn, &definition, 0).unwrap();
-        engine.process(conn, &definition, 0.0, 1).unwrap();
+        engine.create(conn, &definition, at(0)).unwrap();
+        engine.process(conn, &definition, 0.0, at(1)).unwrap();
         let mut state = store::get_state(conn, &definition.id).unwrap().unwrap();
         state.evaluation.counter = evaluator::MAX_SAFE_INTEGER;
         store::put_state(conn, &definition.id, &state, 1).unwrap();
 
-        let error = engine.process(conn, &definition, 1.0, 2).unwrap_err();
+        let error = engine.process(conn, &definition, 1.0, at(2)).unwrap_err();
         assert!(matches!(
             error,
             EngineError::Evaluator(EvaluatorError::CounterLimit)
@@ -443,7 +453,7 @@ fn reading<'a>(
     measurement_key: &'a str,
     channel_index: Option<u16>,
     values: &'a [f64],
-    received_at: i64,
+    received_at: InputTime,
 ) -> AcceptedReading<'a> {
     AcceptedReading {
         adapter,
@@ -468,7 +478,7 @@ fn deliver_routes_a_reading_to_every_matching_pipeline_only() {
         second_value.id = "press-01-cycle-count-c".parse().unwrap();
         second_value.input.value_index = 1;
         for definition in [&count, &pinned, &second_value] {
-            engine.create(conn, definition, 0).unwrap();
+            engine.create(conn, definition, at(0)).unwrap();
         }
 
         let outcomes = engine
@@ -480,7 +490,7 @@ fn deliver_routes_a_reading_to_every_matching_pipeline_only() {
                     "contact_state",
                     None,
                     &[1.0],
-                    1,
+                    at(1),
                 ),
             )
             .unwrap();
@@ -506,7 +516,7 @@ fn deliver_routes_a_reading_to_every_matching_pipeline_only() {
                     "contact_state",
                     None,
                     &[0.0, 0.0],
-                    2,
+                    at(2),
                 ),
             )
             .unwrap();
@@ -517,7 +527,7 @@ fn deliver_routes_a_reading_to_every_matching_pipeline_only() {
             engine
                 .deliver(
                     conn,
-                    &reading("trial_sample", None, "illuminance_lux", None, &[1.0], 3)
+                    &reading("trial_sample", None, "illuminance_lux", None, &[1.0], at(3))
                 )
                 .unwrap()
                 .is_empty()
@@ -526,7 +536,7 @@ fn deliver_routes_a_reading_to_every_matching_pipeline_only() {
             engine
                 .deliver(
                     conn,
-                    &reading("other", None, "contact_state", None, &[1.0], 3)
+                    &reading("other", None, "contact_state", None, &[1.0], at(3))
                 )
                 .unwrap()
                 .is_empty()
@@ -535,7 +545,14 @@ fn deliver_routes_a_reading_to_every_matching_pipeline_only() {
             engine
                 .deliver(
                     conn,
-                    &reading("trial_sample", None, "contact_state", Some(0), &[1.0], 3)
+                    &reading(
+                        "trial_sample",
+                        None,
+                        "contact_state",
+                        Some(0),
+                        &[1.0],
+                        at(3)
+                    )
                 )
                 .unwrap()
                 .is_empty()
@@ -550,8 +567,8 @@ fn import_replaces_definitions_clears_vanished_topics_and_restarts_every_series(
         let engine = engine();
         let count = count_definition();
         let measurement = measurement_definition();
-        let first = engine.create(conn, &count, 0).unwrap();
-        engine.create(conn, &measurement, 0).unwrap();
+        let first = engine.create(conn, &count, at(0)).unwrap();
+        engine.create(conn, &measurement, at(0)).unwrap();
         let before = outbox::count(conn).unwrap();
 
         let mut renamed = count.clone();
@@ -562,7 +579,7 @@ fn import_replaces_definitions_clears_vanished_topics_and_restarts_every_series(
             ..added.input
         };
         let started = engine
-            .import(conn, &[renamed.clone(), added.clone()], 10)
+            .import(conn, &[renamed.clone(), added.clone()], at(10))
             .unwrap();
         assert_eq!(started.len(), 2);
         assert_ne!(
@@ -591,7 +608,7 @@ fn import_replaces_definitions_clears_vanished_topics_and_restarts_every_series(
         let mut duplicate = vec![count.clone(), count.clone()];
         duplicate[1].display_name = Some("dup".into());
         assert!(matches!(
-            engine.import(conn, &duplicate, 11),
+            engine.import(conn, &duplicate, at(11)),
             Err(EngineError::Validation(_))
         ));
     });

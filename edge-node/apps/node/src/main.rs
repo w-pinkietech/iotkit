@@ -360,10 +360,9 @@ async fn run(
     let pipeline_engine = iotkit_core_pipeline::PipelineEngine::new(config.edge_node_id.clone());
     {
         let engine = pipeline_engine.clone();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis() as i64)
-            .unwrap_or(0);
+        // The startup reconciliation has no clock-trust evidence yet, so a
+        // series it starts publishes without a wall-clock time.
+        let now = iotkit_core_pipeline::InputTime::now(None);
         let started = db
             .with_conn(move |conn| {
                 let tx = rusqlite::Transaction::new_unchecked(

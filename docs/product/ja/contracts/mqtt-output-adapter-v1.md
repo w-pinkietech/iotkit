@@ -5,7 +5,7 @@ description: "IoTKit端末がObservationとstatusを標準MQTT Brokerへ公開�
 language: ja
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 2
+revision: 3
 ---
 
 # IoTKit MQTT Output Adapter契約 v1

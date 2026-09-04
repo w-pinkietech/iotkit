@@ -7,7 +7,7 @@ use iotkit_core_types::EdgeNodeId;
 
 use crate::definition::PipelineDefinition;
 use crate::evaluator::EvaluationState;
-use crate::wire::ObservationValue;
+use crate::wire::{InputTime, ObservationValue};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -24,7 +24,7 @@ pub struct PipelineState {
     pub next_sequence: u64,
     pub evaluation: EvaluationState,
     pub last_value: Option<ObservationValue>,
-    pub last_timestamp: Option<i64>,
+    pub last_published_at: Option<InputTime>,
 }
 
 pub fn insert_definition(
@@ -150,7 +150,8 @@ fn decode_definition(id: &str, json: &str) -> Result<PipelineDefinition, StoreEr
 pub fn get_state(conn: &Connection, id: &PipelineId) -> Result<Option<PipelineState>, StoreError> {
     conn.query_row(
         "SELECT structural_hash, series_id, next_sequence, initialized, active, counter,
-                pending, pending_active, pending_since, last_value_json, last_timestamp
+                pending, pending_active, pending_since, last_value_json, last_uptime_ms,
+                last_unix_epoch_ms
          FROM pipeline_state WHERE pipeline_id = ?1",
         [id.as_str()],
         |row| {
@@ -168,7 +169,13 @@ pub fn get_state(conn: &Connection, id: &PipelineId) -> Result<Option<PipelineSt
                     pending_since: row.get(8)?,
                 },
                 last_value: last_value_json.as_deref().and_then(decode_value),
-                last_timestamp: row.get(10)?,
+                last_published_at: match row.get::<_, Option<i64>>(10)? {
+                    Some(uptime_ms) => Some(InputTime {
+                        uptime_ms,
+                        unix_epoch_ms: row.get(11)?,
+                    }),
+                    None => None,
+                },
             })
         },
     )
@@ -185,8 +192,9 @@ pub fn put_state(
     conn.execute(
         "INSERT INTO pipeline_state
             (pipeline_id, structural_hash, series_id, next_sequence, initialized, active, counter,
-             pending, pending_active, pending_since, last_value_json, last_timestamp, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             pending, pending_active, pending_since, last_value_json, last_uptime_ms,
+             last_unix_epoch_ms, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(pipeline_id) DO UPDATE SET
             structural_hash = excluded.structural_hash,
             series_id = excluded.series_id,
@@ -198,7 +206,8 @@ pub fn put_state(
             pending_active = excluded.pending_active,
             pending_since = excluded.pending_since,
             last_value_json = excluded.last_value_json,
-            last_timestamp = excluded.last_timestamp,
+            last_uptime_ms = excluded.last_uptime_ms,
+            last_unix_epoch_ms = excluded.last_unix_epoch_ms,
             updated_at = excluded.updated_at",
         params![
             id.as_str(),
@@ -212,7 +221,8 @@ pub fn put_state(
             state.evaluation.pending_active,
             state.evaluation.pending_since,
             state.last_value.map(encode_value),
-            state.last_timestamp,
+            state.last_published_at.map(|at| at.uptime_ms),
+            state.last_published_at.and_then(|at| at.unix_epoch_ms),
             now,
         ],
     )?;

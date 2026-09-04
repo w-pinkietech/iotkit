@@ -5,7 +5,7 @@ description: "Defines the topics, payloads, delivery, and consumer obligations w
 language: en
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 2
+revision: 3
 ---
 
 # IoTKit MQTT Output Adapter contract v1

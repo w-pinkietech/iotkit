@@ -76,11 +76,19 @@ fn producer_output_matches_every_contract_fixture_byte_for_byte() {
                 ObservationValue::AccumulatedCount(expected["value"].as_i64().unwrap())
             }
         };
+        assert!(
+            expected.as_object().unwrap().contains_key("unix_epoch_ms"),
+            "{}: the wall-clock key is always present",
+            fixture.name
+        );
         let observation = Observation {
             pipeline_id,
             series_id: expected["series_id"].as_str().unwrap().to_owned(),
             sequence: expected["sequence"].as_u64().unwrap(),
-            timestamp: expected["timestamp"].as_i64().unwrap(),
+            at: InputTime {
+                uptime_ms: expected["uptime_ms"].as_i64().unwrap(),
+                unix_epoch_ms: expected["unix_epoch_ms"].as_i64(),
+            },
             value,
         };
         assert_eq!(
@@ -128,5 +136,27 @@ fn measurement_values_keep_fraction_only_when_present() {
     assert_eq!(
         ObservationValue::AccumulatedCount(0).to_json().to_string(),
         "0"
+    );
+}
+
+#[test]
+fn uptime_is_monotonic_and_null_wall_clock_serializes_as_null() {
+    let first = uptime_ms();
+    let second = uptime_ms();
+    assert!(first > 0 && second >= first);
+
+    let observation = Observation {
+        pipeline_id: "p".parse().unwrap(),
+        series_id: "s".into(),
+        sequence: 1,
+        at: InputTime {
+            uptime_ms: 42,
+            unix_epoch_ms: None,
+        },
+        value: ObservationValue::State(true),
+    };
+    assert_eq!(
+        String::from_utf8(observation.payload()).unwrap(),
+        "{\"series_id\":\"s\",\"sequence\":1,\"uptime_ms\":42,\"unix_epoch_ms\":null,\"value\":true}"
     );
 }

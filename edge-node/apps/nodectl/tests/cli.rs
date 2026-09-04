@@ -3979,7 +3979,9 @@ fn pipeline_cli_lists_exports_imports_and_resets_through_typed_operations() {
     let engine = iotkit_core_pipeline::PipelineEngine::new("rpi1".parse().unwrap());
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations()).unwrap();
     db.with_conn_sync(|conn| {
-        engine.reconcile(conn, 0).unwrap();
+        engine
+            .reconcile(conn, iotkit_core_pipeline::InputTime::now(None))
+            .unwrap();
         Ok(())
     })
     .unwrap();

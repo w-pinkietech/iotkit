@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use iotkit_core_pipeline::{AcceptedReading, EngineError, PipelineEngine, PipelineFaults};
+use iotkit_core_pipeline::{
+    AcceptedReading, EngineError, InputTime, PipelineEngine, PipelineFaults,
+};
 use iotkit_ingest_contract::ReadingItem;
 
 use crate::principal::IngestPrincipal;
@@ -54,7 +56,7 @@ impl PipelineDelivery {
         conn: &rusqlite::Connection,
         principal: &IngestPrincipal,
         item: &ReadingItem,
-        received_at: i64,
+        received_at: InputTime,
     ) -> Result<(), String> {
         let Some(adapter) = self.adapters.get(principal.configured_source()) else {
             return Ok(());
@@ -81,7 +83,7 @@ impl PipelineDelivery {
                 );
                 tracing::warn!(pipeline = %pipeline_id, %error, "pipeline discarded an input");
                 self.faults
-                    .record(&pipeline_id, error.to_string(), received_at);
+                    .record(&pipeline_id, error.to_string(), received_at.uptime_ms);
             }
         }
         Ok(())

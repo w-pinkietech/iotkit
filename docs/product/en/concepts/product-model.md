@@ -5,7 +5,7 @@ description: "Defines the complete product scope, component responsibilities, au
 language: en
 translation_key: concepts.product-model
 status: stable
-revision: 5
+revision: 6
 ---
 
 # IoTKit product model

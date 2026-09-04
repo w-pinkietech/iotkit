@@ -1,6 +1,14 @@
 use super::*;
 use crate::definition::tests::{count_definition, measurement_definition};
 use crate::engine::PipelineEngine;
+use crate::wire::InputTime;
+
+fn at(uptime_ms: i64) -> InputTime {
+    InputTime {
+        uptime_ms,
+        unix_epoch_ms: None,
+    }
+}
 
 fn open() -> iotkit_core_storage::DbHandle {
     let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
@@ -33,7 +41,7 @@ fn export_writes_the_stored_definitions_atomically() {
     let path = directory.path().join("pipelines.toml");
     let engine = PipelineEngine::new("rpi1".parse().unwrap());
     db.with_conn_sync(|conn| {
-        engine.create(conn, &count_definition(), 0).unwrap();
+        engine.create(conn, &count_definition(), at(0)).unwrap();
         export_definitions(conn, &path).unwrap();
         Ok(())
     })
@@ -45,7 +53,9 @@ fn export_writes_the_stored_definitions_atomically() {
     );
 
     db.with_conn_sync(|conn| {
-        engine.create(conn, &measurement_definition(), 1).unwrap();
+        engine
+            .create(conn, &measurement_definition(), at(1))
+            .unwrap();
         export_definitions(conn, &path).unwrap();
         Ok(())
     })
