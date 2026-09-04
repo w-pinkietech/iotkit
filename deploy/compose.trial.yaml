@@ -29,69 +29,24 @@ services:
         target: /mosquitto/config/passwords
         read_only: true
 
-  edge:
-    build:
-      context: ..
-      dockerfile: edge/Dockerfile
-      target: trial-runtime
-    user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
-    restart: unless-stopped
-    network_mode: host
-    depends_on:
-      broker:
-        condition: service_healthy
-    entrypoint: ["/usr/local/bin/iotkit-edge"]
-    command:
-      - serve
-      - --db
-      - /data/edge.db
-      - --edge-id
-      - ${IOTKIT_TRIAL_EDGE_ID}
-      - --broker-url
-      - tcp://${IOTKIT_TRIAL_BROKER_BIND}:${IOTKIT_TRIAL_BROKER_PORT}
-      - --client-id
-      - iotkit-edge-trial
-      - --username
-      - edge
-      - --password-file
-      - /run/secrets/edge-mqtt-password
-      - --allow-insecure
-      - --http-listen
-      - ${IOTKIT_TRIAL_CONSOLE_BIND}:${IOTKIT_TRIAL_CONSOLE_PORT}
-      - --public-origin
-      - http://${IOTKIT_TRIAL_CONSOLE_BIND}:${IOTKIT_TRIAL_CONSOLE_PORT}
-      - --development-http
-      - --deployment-profile
-      - trial
-    volumes:
-      - type: bind
-        source: ${IOTKIT_TRIAL_STATE}/edge
-        target: /data
-      - type: bind
-        source: ${IOTKIT_TRIAL_STATE}/secrets/edge-mqtt-password
-        target: /run/secrets/edge-mqtt-password
-        read_only: true
-
   edge-node:
     build:
       context: ..
-      dockerfile: edge/Dockerfile
-      target: trial-runtime
+      dockerfile: edge-node/Dockerfile
     user: "${IOTKIT_TRIAL_UID}:${IOTKIT_TRIAL_GID}"
     restart: unless-stopped
     # Cleanup is bounded to ten seconds; reserve the remaining five seconds
-    # for runtime teardown before Docker sends SIGKILL.
+    # for runtime teardown before Docker sends SIGKILL. The graceful offline
+    # status goes out inside this window.
     stop_grace_period: 15s
     network_mode: host
     depends_on:
       broker:
         condition: service_healthy
-    entrypoint: ["/usr/local/bin/iotkit-edge-node"]
     command:
       - --config
       - /run/iotkit/iotkit.toml
     environment:
-      IOTKIT_EDGE_NODE_ID: ${IOTKIT_TRIAL_EDGE_NODE_ID}
       # Explicit trial-only gate; the factory refuses trial-sample without this.
       IOTKIT_ENABLE_TRIAL_SAMPLE: "1"
     volumes:
@@ -101,6 +56,10 @@ services:
       - type: bind
         source: ${IOTKIT_TRIAL_STATE}/node/iotkit.toml
         target: /run/iotkit/iotkit.toml
+        read_only: true
+      - type: bind
+        source: ${IOTKIT_TRIAL_STATE}/node/pipelines-trial.toml
+        target: /run/iotkit/pipelines-trial.toml
         read_only: true
       - type: bind
         source: ${IOTKIT_TRIAL_STATE}/secrets/node-mqtt-password
