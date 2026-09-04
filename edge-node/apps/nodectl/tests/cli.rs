@@ -4093,4 +4093,62 @@ fall_threshold = 0.5
         outbox, 2,
         "import and reset each published sequence 1 value 0"
     );
+
+    // A tuning change through `update` keeps the series (#232 child issue 4).
+    let tuned_file = dir.path().join("tuned.toml");
+    std::fs::write(
+        &tuned_file,
+        backup.replace("rise_threshold = 0.5", "rise_threshold = 0.7"),
+    )
+    .unwrap();
+    let updated = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "update",
+        tuned_file.to_str().unwrap(),
+    ]));
+    let updated: Value = serde_json::from_str(&updated).unwrap();
+    assert_eq!(updated[0]["id"], "press-01-cycle-count");
+    assert!(
+        updated[0]["new_series"].is_null(),
+        "a tuning change keeps the series: {updated}"
+    );
+    assert!(
+        std::fs::read_to_string(&exported)
+            .unwrap()
+            .contains("rise_threshold = 0.7")
+    );
+
+    let deleted = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "delete",
+        "press-01-cycle-count",
+    ]));
+    let deleted: Value = serde_json::from_str(&deleted).unwrap();
+    assert_eq!(deleted["deleted"], true);
+    let listed = assert_success(run(&[
+        "--db",
+        db_path.to_str().unwrap(),
+        "pipeline",
+        "list",
+    ]));
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed).unwrap(),
+        serde_json::json!([])
+    );
+    let (rows, empty_retained): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), SUM(LENGTH(payload) = 0 AND retain) FROM observation_outbox",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (rows, empty_retained),
+        (3, 1),
+        "delete enqueues the zero-length retained payload"
+    );
 }
