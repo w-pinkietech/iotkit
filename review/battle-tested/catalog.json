@@ -25,7 +25,8 @@
       "concerns": ["custody", "network-recovery", "external-output"],
       "path_prefixes": [
         "edge-node/core/publish/",
-        "edge-node/apps/node/src/mqtt_publish_task.rs",
+        "edge-node/core/pipeline/src/outbox.rs",
+        "edge-node/apps/node/src/output_mqtt.rs",
         "edge-node/apps/node/src/publish_task.rs",
         "edge-node/apps/node/src/retention.rs",
         "edge/src/mqtt/",
@@ -34,15 +35,17 @@
         "edge/src/storage/semantic_output/",
         "edge/output-adapters/",
         "scripts/test-edge-output.sh",
-        "scripts/test-edge-resilience.sh"
+        "scripts/test-edge-resilience.sh",
+        "scripts/test-journey.sh"
       ],
-      "review_question": "After disconnect, restart, duplicate delivery, or delayed acknowledgement, do the Edge Node raw cursor and IoTKit Edge output outbox converge without silent loss or identity changes?",
+      "review_question": "After disconnect, restart, duplicate delivery, or delayed acknowledgement, do the Edge Node raw cursor and IoTKit Edge output outbox converge without silent loss or identity changes? For the redesigned MQTT Output Adapter: does the observation outbox converge to PUBACK-acknowledged with the series and sequence intact, and at most one duplicate of the in-flight publication?",
       "provenance": [
         "docs/redesign/decisions/D3-process-and-wave-decisions.md"
       ],
       "guards": [
         "scripts/test-edge-output.sh",
-        "scripts/test-edge-resilience.sh"
+        "scripts/test-edge-resilience.sh",
+        "scripts/test-journey.sh"
       ],
       "coverage_gap": "The existing gates exercise process and Broker outages, not every factory router, Wi-Fi, DNS, or long-partition behavior."
     },
@@ -146,7 +149,7 @@
         "edge/src/storage/",
     "edge/src/diagnostics/",
     "edge-node/apps/node/src/health.rs",
-    "edge-node/apps/node/src/mqtt_publish_task.rs",
+    "edge-node/apps/node/src/output_mqtt.rs",
     "edge-node/apps/node/src/supervision.rs",
     "edge/tests/diagnostics_contract.rs",
     "edge/tests/console_contract.rs",
