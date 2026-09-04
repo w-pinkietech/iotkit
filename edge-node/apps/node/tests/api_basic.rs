@@ -5,7 +5,7 @@ use std::time::Duration;
 use iotkit_core_storage::{DbHandle, Migration};
 use iotkit_edge_node::api::{ApiHandle, spawn_api_task};
 use iotkit_edge_node::config::{
-    ApiConfig, ConfigError, ConfigSource, RawApiConfig, RawConfig, resolve,
+    ApiConfig, ConfigError, ConfigSource, RawApiConfig, RawConfig, RawEdgeNodeConfig, resolve,
 };
 use iotkit_edge_node::health::HealthState;
 use reqwest::StatusCode;
@@ -92,7 +92,7 @@ fn api_config(bind: SocketAddr) -> ApiConfig {
     ApiConfig {
         enabled: true,
         bind,
-        edge_node_name: "test-edge".to_string(),
+        edge_node_id: "test-edge".parse().unwrap(),
     }
 }
 
@@ -482,6 +482,10 @@ fn private_source_guard_accepts_only_private_or_link_local_sources() {
 #[test]
 fn api_bind_rejects_ipv6_socket_addresses() {
     let raw = RawConfig {
+        edge_node: RawEdgeNodeConfig {
+            id: Some("test-edge".to_string()),
+            ..RawEdgeNodeConfig::default()
+        },
         api: RawApiConfig {
             bind: Some("[::]:8443".to_string()),
             ..RawApiConfig::default()

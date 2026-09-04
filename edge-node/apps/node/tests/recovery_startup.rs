@@ -512,16 +512,15 @@ fn fenced_candidate_exits_before_logging_or_starting_normal_runtime() {
     std::fs::write(
         &config,
         format!(
-            "[edge_node]\n db_path = {:?}\n health_json_path = {:?}\n\
+            "[edge_node]\n id = \"{SENTINEL}\"\n db_path = {:?}\n health_json_path = {:?}\n\
              [adapters.bravepi]\n enabled = false\n port = {:?}\n\
-             [api]\n enabled = true\n bind = {:?}\n edge_node_name = {:?}\n\
-             [exit.mqtt]\n enabled = true\n host = {:?}\n port = 1883\n\
+             [api]\n enabled = true\n bind = {:?}\n\
+             [output.mqtt]\n enabled = true\n host = {:?}\n port = 1883\n\
              password_file = {:?}\n allow_insecure = true\n",
             database,
             directory.path().join(format!("{SENTINEL}-health.json")),
             format!("{SENTINEL}-source"),
             address.to_string(),
-            SENTINEL,
             format!("{SENTINEL}-host"),
             directory.path().join(format!("{SENTINEL}-password")),
         ),
@@ -569,12 +568,11 @@ fn malformed_recovery_schema_fails_closed_before_migration_or_config_logging() {
     std::fs::write(
         &config,
         format!(
-            "[edge_node]\n db_path = {:?}\n health_json_path = {:?}\n\
-             [api]\n enabled = true\n bind = {:?}\n edge_node_name = {:?}\n",
+            "[edge_node]\n id = \"{SENTINEL}\"\n db_path = {:?}\n health_json_path = {:?}\n\
+             [api]\n enabled = true\n bind = {:?}\n",
             database,
             directory.path().join(format!("{SENTINEL}-health.json")),
             address.to_string(),
-            SENTINEL,
         ),
     )
     .unwrap();
@@ -610,12 +608,11 @@ fn malformed_recovery_row_fails_closed_without_repair_or_service_start() {
     std::fs::write(
         &config,
         format!(
-            "[edge_node]\n db_path = {:?}\n health_json_path = {:?}\n\
-             [api]\n enabled = true\n bind = {:?}\n edge_node_name = {:?}\n",
+            "[edge_node]\n id = \"{SENTINEL}\"\n db_path = {:?}\n health_json_path = {:?}\n\
+             [api]\n enabled = true\n bind = {:?}\n",
             database,
             directory.path().join(format!("{SENTINEL}-health.json")),
             address.to_string(),
-            SENTINEL,
         ),
     )
     .unwrap();
@@ -657,12 +654,11 @@ fn rotated_recovery_authority_still_fails_closed_before_normal_runtime() {
     std::fs::write(
         &config,
         format!(
-            "[edge_node]\n db_path = {:?}\n health_json_path = {:?}\n\
-             [api]\n enabled = true\n bind = {:?}\n edge_node_name = {:?}\n",
+            "[edge_node]\n id = \"{SENTINEL}\"\n db_path = {:?}\n health_json_path = {:?}\n\
+             [api]\n enabled = true\n bind = {:?}\n",
             database,
             directory.path().join(format!("{SENTINEL}-health.json")),
             address.to_string(),
-            SENTINEL,
         ),
     )
     .unwrap();
@@ -697,14 +693,13 @@ fn fenced_candidate_precedes_invalid_adapter_catalog_validation() {
     std::fs::write(
         &config,
         format!(
-            "[edge_node]\n db_path = {:?}\n health_json_path = {:?}\n\
+            "[edge_node]\n id = \"{SENTINEL}\"\n db_path = {:?}\n health_json_path = {:?}\n\
              [adapters.instances.sentinel]\n type = \"unknown-adapter\"\n enabled = true\n\
              config_schema_version = 1\n source = \"{SENTINEL}-source\"\n\
-             [api]\n enabled = true\n bind = {:?}\n edge_node_name = {:?}\n",
+             [api]\n enabled = true\n bind = {:?}\n",
             database,
             directory.path().join(format!("{SENTINEL}-health.json")),
             address.to_string(),
-            SENTINEL,
         ),
     )
     .unwrap();

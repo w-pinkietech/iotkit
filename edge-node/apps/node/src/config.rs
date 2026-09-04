@@ -3,10 +3,17 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use iotkit_core_types::EdgeNodeId;
 use serde::Deserialize;
 
 use crate::input_adapters::PreparedInputAdapter;
+
+pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+pub const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+pub const MAX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60 * 60);
+pub const DEFAULT_PIPELINES_EXPORT_FILE: &str = "pipelines.toml";
 
 // ── Error ───────────────────────────────────────────────
 
@@ -36,12 +43,17 @@ pub struct RawConfig {
     #[serde(default)]
     pub api: RawApiConfig,
     #[serde(default)]
-    pub exit: RawExitConfig,
+    pub output: RawOutputConfig,
+    #[serde(default)]
+    pub status: RawStatusConfig,
+    #[serde(default)]
+    pub pipelines: RawPipelinesConfig,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RawEdgeNodeConfig {
+    pub id: Option<String>,
     pub db_path: Option<String>,
     pub retention_days: Option<u64>,
     pub quarantine_ttl_days: Option<u64>,
@@ -106,18 +118,17 @@ impl RawAdapterConfigScalar {
 pub struct RawApiConfig {
     pub enabled: Option<bool>,
     pub bind: Option<String>,
-    pub edge_node_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RawExitConfig {
-    pub mqtt: Option<RawMqttExitConfig>,
+pub struct RawOutputConfig {
+    pub mqtt: Option<RawMqttOutputConfig>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct RawMqttExitConfig {
+pub struct RawMqttOutputConfig {
     pub enabled: Option<bool>,
     pub host: Option<String>,
     pub port: Option<u16>,
@@ -125,6 +136,18 @@ pub struct RawMqttExitConfig {
     pub trust_mode: Option<String>,
     pub ca_file: Option<String>,
     pub allow_insecure: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RawStatusConfig {
+    pub heartbeat_interval: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RawPipelinesConfig {
+    pub export_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +170,7 @@ pub struct RawRpiLocalConfig {
 #[derive(Debug)]
 pub struct EdgeNodeConfig {
     pub config_source: ConfigSource,
+    pub edge_node_id: EdgeNodeId,
     pub db_path: String,
     pub retention_days: u64,
     pub quarantine_ttl_days: u64,
@@ -156,7 +180,9 @@ pub struct EdgeNodeConfig {
     pub rpi_local: Option<RpiLocalResolvedConfig>,
     pub adapter_instances: Vec<PreparedInputAdapter>,
     pub api: ApiConfig,
-    pub mqtt_exit: Option<MqttExitConfig>,
+    pub mqtt_output: Option<MqttOutputConfig>,
+    pub status: StatusConfig,
+    pub pipelines: PipelinesConfig,
 }
 
 #[derive(Debug)]
@@ -186,7 +212,7 @@ pub struct RpiLocalResolvedConfig {
 pub struct ApiConfig {
     pub enabled: bool,
     pub bind: SocketAddr,
-    pub edge_node_name: String,
+    pub edge_node_id: EdgeNodeId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,13 +222,25 @@ pub enum MqttTrustMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MqttExitConfig {
+pub struct MqttOutputConfig {
     pub host: String,
     pub port: u16,
     pub password_file: PathBuf,
     pub trust_mode: MqttTrustMode,
     pub ca_file: Option<PathBuf>,
     pub allow_insecure: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusConfig {
+    pub heartbeat_interval: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelinesConfig {
+    /// Derived backup of the pipeline definitions; written after each committed
+    /// change and never read at startup.
+    pub export_path: PathBuf,
 }
 
 // ── Pipeline: load_raw ─────────────────────────────────
@@ -324,6 +362,7 @@ pub fn apply_env(raw: &mut RawConfig) -> Result<(), ConfigError> {
 /// Applies defaults to `None` fields, validates constraints,
 /// and returns `Err(ConfigError::Validation)` on invalid values.
 pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeNodeConfig, ConfigError> {
+    let edge_node_id = resolve_edge_node_id(raw.edge_node.id)?;
     let db_path = raw
         .edge_node
         .db_path
@@ -450,17 +489,20 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeNodeConfig, C
         instances
     };
 
-    let api = resolve_api(raw.api)?;
-    let mqtt_exit = resolve_mqtt_exit(raw.exit)?;
+    let api = resolve_api(raw.api, edge_node_id.clone())?;
+    let mqtt_output = resolve_mqtt_output(raw.output)?;
+    let status = resolve_status(raw.status)?;
+    let pipelines = resolve_pipelines(raw.pipelines, &db_path)?;
 
-    if adapter_instances.is_empty() && !api.enabled && mqtt_exit.is_none() {
+    if adapter_instances.is_empty() && !api.enabled && mqtt_output.is_none() {
         return Err(ConfigError::Validation(
-            "at least one adapter, api, or MQTT exit must be enabled".to_string(),
+            "at least one adapter, api, or MQTT output must be enabled".to_string(),
         ));
     }
 
     Ok(EdgeNodeConfig {
         config_source: source,
+        edge_node_id,
         db_path,
         retention_days,
         quarantine_ttl_days,
@@ -470,8 +512,78 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeNodeConfig, C
         rpi_local,
         adapter_instances,
         api,
-        mqtt_exit,
+        mqtt_output,
+        status,
+        pipelines,
     })
+}
+
+fn resolve_edge_node_id(raw: Option<String>) -> Result<EdgeNodeId, ConfigError> {
+    let raw = raw.ok_or_else(|| {
+        ConfigError::Validation(
+            "edge_node.id is required (stable edge-node-id, e.g. \"rpi1\")".to_string(),
+        )
+    })?;
+    EdgeNodeId::parse(raw.as_str())
+        .map_err(|error| ConfigError::Validation(format!("edge_node.id {error}: {raw:?}")))
+}
+
+fn resolve_status(raw: RawStatusConfig) -> Result<StatusConfig, ConfigError> {
+    let heartbeat_interval = match raw.heartbeat_interval {
+        None => DEFAULT_HEARTBEAT_INTERVAL,
+        Some(text) => parse_duration(&text).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "status.heartbeat_interval must be an integer with unit ms, s, m, or h (e.g. \"60s\"), got {text:?}"
+            ))
+        })?,
+    };
+    if !(MIN_HEARTBEAT_INTERVAL..=MAX_HEARTBEAT_INTERVAL).contains(&heartbeat_interval) {
+        return Err(ConfigError::Validation(format!(
+            "status.heartbeat_interval must be between 5s and 1h, got {}ms",
+            heartbeat_interval.as_millis()
+        )));
+    }
+    Ok(StatusConfig { heartbeat_interval })
+}
+
+/// Parses `<integer><unit>` where unit is `ms`, `s`, `m`, or `h`.
+fn parse_duration(text: &str) -> Option<Duration> {
+    let text = text.trim();
+    let split = text.find(|ch: char| !ch.is_ascii_digit())?;
+    let (digits, unit) = text.split_at(split);
+    let amount: u64 = digits.parse().ok()?;
+    match unit {
+        "ms" => Some(Duration::from_millis(amount)),
+        "s" => Some(Duration::from_secs(amount)),
+        "m" => amount.checked_mul(60).map(Duration::from_secs),
+        "h" => amount.checked_mul(60 * 60).map(Duration::from_secs),
+        _ => None,
+    }
+}
+
+fn resolve_pipelines(
+    raw: RawPipelinesConfig,
+    db_path: &str,
+) -> Result<PipelinesConfig, ConfigError> {
+    let export_path = match raw.export_path {
+        None => default_pipelines_export_path(db_path),
+        Some(path) if path.trim().is_empty() => {
+            return Err(ConfigError::Validation(
+                "pipelines.export_path must not be empty".to_string(),
+            ));
+        }
+        Some(path) => PathBuf::from(path),
+    };
+    if export_path == Path::new(db_path) {
+        return Err(ConfigError::Validation(
+            "pipelines.export_path must differ from edge_node.db_path".to_string(),
+        ));
+    }
+    Ok(PipelinesConfig { export_path })
+}
+
+pub fn default_pipelines_export_path(db_path: &str) -> PathBuf {
+    sibling_of_db(db_path, DEFAULT_PIPELINES_EXPORT_FILE)
 }
 
 fn resolve_adapter_instances(
@@ -496,7 +608,7 @@ fn resolve_adapter_instances(
     Ok(resolved)
 }
 
-fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, ConfigError> {
+fn resolve_mqtt_output(raw: RawOutputConfig) -> Result<Option<MqttOutputConfig>, ConfigError> {
     let Some(raw) = raw.mqtt else {
         return Ok(None);
     };
@@ -507,7 +619,7 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
     let host = raw.host.unwrap_or_else(|| "127.0.0.1".to_string());
     if host.trim().is_empty() {
         return Err(ConfigError::Validation(
-            "exit.mqtt.host must not be empty".to_string(),
+            "output.mqtt.host must not be empty".to_string(),
         ));
     }
     let password_file = raw
@@ -515,14 +627,14 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
         .filter(|path| !path.trim().is_empty())
         .ok_or_else(|| {
             ConfigError::Validation(
-                "exit.mqtt.password_file is required when MQTT exit is enabled".to_string(),
+                "output.mqtt.password_file is required when MQTT output is enabled".to_string(),
             )
         })?;
 
     let port = raw.port.unwrap_or(8883);
     if port == 0 {
         return Err(ConfigError::Validation(
-            "exit.mqtt.port must be greater than zero".to_string(),
+            "output.mqtt.port must be greater than zero".to_string(),
         ));
     }
 
@@ -530,7 +642,7 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
     let (trust_mode, ca_file) = if allow_insecure {
         if raw.trust_mode.is_some() || raw.ca_file.is_some() {
             return Err(ConfigError::Validation(
-                "exit.mqtt.allow_insecure cannot be combined with trust_mode or ca_file"
+                "output.mqtt.allow_insecure cannot be combined with trust_mode or ca_file"
                     .to_string(),
             ));
         }
@@ -540,7 +652,7 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
             (Some("system_roots"), None) => (MqttTrustMode::SystemRoots, None),
             (Some("system_roots"), Some(_)) => {
                 return Err(ConfigError::Validation(
-                    "exit.mqtt.ca_file is forbidden with system_roots".to_string(),
+                    "output.mqtt.ca_file is forbidden with system_roots".to_string(),
                 ));
             }
             (Some("bundle_only"), Some(path)) if !path.trim().is_empty() => {
@@ -548,23 +660,23 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
             }
             (Some("bundle_only"), _) => {
                 return Err(ConfigError::Validation(
-                    "exit.mqtt.ca_file is required with bundle_only".to_string(),
+                    "output.mqtt.ca_file is required with bundle_only".to_string(),
                 ));
             }
             (Some(other), _) => {
                 return Err(ConfigError::Validation(format!(
-                    "exit.mqtt.trust_mode must be system_roots or bundle_only, got {other:?}"
+                    "output.mqtt.trust_mode must be system_roots or bundle_only, got {other:?}"
                 )));
             }
             (None, _) => {
                 return Err(ConfigError::Validation(
-                    "exit.mqtt.trust_mode is required when TLS is enabled".to_string(),
+                    "output.mqtt.trust_mode is required when TLS is enabled".to_string(),
                 ));
             }
         }
     };
 
-    Ok(Some(MqttExitConfig {
+    Ok(Some(MqttOutputConfig {
         host,
         port,
         password_file: PathBuf::from(password_file),
@@ -574,7 +686,7 @@ fn resolve_mqtt_exit(raw: RawExitConfig) -> Result<Option<MqttExitConfig>, Confi
     }))
 }
 
-fn resolve_api(raw: RawApiConfig) -> Result<ApiConfig, ConfigError> {
+fn resolve_api(raw: RawApiConfig, edge_node_id: EdgeNodeId) -> Result<ApiConfig, ConfigError> {
     let enabled = raw.enabled.unwrap_or(true);
     let bind_raw = raw.bind.unwrap_or_else(|| "0.0.0.0:8443".to_string());
     let bind: SocketAddr = bind_raw.parse().map_err(|_| {
@@ -587,26 +699,21 @@ fn resolve_api(raw: RawApiConfig) -> Result<ApiConfig, ConfigError> {
             "api.bind must be an IPv4 socket address".to_string(),
         ));
     }
-    let edge_node_name = raw
-        .edge_node_name
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(default_edge_node_name);
     Ok(ApiConfig {
         enabled,
         bind,
-        edge_node_name,
+        edge_node_id,
     })
 }
 
-fn default_edge_node_name() -> String {
-    crate::api::tls::hostname().unwrap_or_else(|| "iotkit-edge-node".to_string())
+pub fn default_health_json_path(db_path: &str) -> PathBuf {
+    sibling_of_db(db_path, "health.json")
 }
 
-pub fn default_health_json_path(db_path: &str) -> PathBuf {
-    let db_path = Path::new(db_path);
-    match db_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.join("health.json"),
-        _ => PathBuf::from("health.json"),
+fn sibling_of_db(db_path: &str, file_name: &str) -> PathBuf {
+    match Path::new(db_path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(file_name),
+        _ => PathBuf::from(file_name),
     }
 }
 

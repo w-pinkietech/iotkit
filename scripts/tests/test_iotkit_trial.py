@@ -95,6 +95,9 @@ class TrialConfigTests(unittest.TestCase):
             config, "/data/node.db", "/run/secrets/node-mqtt-password"
         )
 
+        self.assertIn('[edge_node]\nid = "trial"\n', rendered)
+        self.assertIn("[output.mqtt]\nenabled = true\n", rendered)
+        self.assertNotIn("[exit.mqtt]", rendered)
         self.assertIn('type = "trial-sample"', rendered)
         self.assertIn('source = "trial:sample"', rendered)
         self.assertIn("poll_interval_ms = 1000", rendered)

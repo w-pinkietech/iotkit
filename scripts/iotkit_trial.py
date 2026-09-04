@@ -142,6 +142,7 @@ max_packet_size 1114112
 
 def render_edge_node_config(config: TrialConfig, db_path: str, password_file: str) -> str:
     return f"""[edge_node]
+id = "trial"
 db_path = {json.dumps(db_path)}
 retention_days = 7
 
@@ -155,7 +156,7 @@ config_schema_version = 1
 source = "trial:sample"
 poll_interval_ms = {config.sample_interval_ms}
 
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = {json.dumps(config.broker_bind)}
 port = {config.broker_port}

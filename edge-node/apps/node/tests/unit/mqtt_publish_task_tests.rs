@@ -61,7 +61,7 @@ async fn preparing_target_before_network_spawn_accepts_an_intervening_reading_wi
 
     let _runtime = prepare_mqtt_publish_runtime(
         db.clone(),
-        MqttExitConfig {
+        MqttOutputConfig {
             host: "broker".into(),
             port: 1883,
             password_file: password.path().into(),

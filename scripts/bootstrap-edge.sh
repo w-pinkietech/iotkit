@@ -305,7 +305,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 cat >"$stage/edge-handoff/edge-mqtt.toml" <<EOF
 
-[exit.mqtt]
+[output.mqtt]
 enabled = true
 host = "$broker_host"
 port = $broker_port

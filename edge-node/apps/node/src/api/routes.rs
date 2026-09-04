@@ -190,7 +190,7 @@ async fn get_box(State(state): State<AppState>) -> Result<Json<Value>, ApiErrorR
     };
 
     Ok(Json(json!({
-        "edge_node_name": state.cfg.edge_node_name,
+        "edge_node_name": state.cfg.edge_node_id.as_str(),
         "epoch": state.epoch,
         "version": env!("CARGO_PKG_VERSION"),
         "ownership": "owned",
