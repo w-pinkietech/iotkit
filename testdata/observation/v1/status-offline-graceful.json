@@ -1,0 +1,9 @@
+{
+  "description": "offline published by IoTKit itself at graceful shutdown, with the shutdown time.",
+  "channel": "status",
+  "status_form": "offline-graceful",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"timestamp\":1784190120456,\"value\":\"offline\"}"
+}

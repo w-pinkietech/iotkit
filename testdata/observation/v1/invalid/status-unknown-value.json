@@ -1,0 +1,7 @@
+{
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "payload": "{\"timestamp\":1,\"value\":\"starting\"}",
+  "reason": "status value is online, degraded, or offline"
+}

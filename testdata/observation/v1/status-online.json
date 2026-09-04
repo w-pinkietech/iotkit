@@ -1,0 +1,9 @@
+{
+  "description": "heartbeat: connected to MQTT and persisting input. Published immediately after connecting and then every heartbeat_interval.",
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"timestamp\":1784190000123,\"value\":\"online\"}"
+}

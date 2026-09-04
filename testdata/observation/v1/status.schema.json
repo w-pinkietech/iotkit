@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/w-pinkietech/iotkit/testdata/observation/v1/status.schema.json",
+  "title": "IoTKit MQTT Output Adapter v1 status payload",
+  "description": "Payload published to iotkit/v1/edge-node/{edge-node-id}/status with QoS 1 and retain. Heartbeats carry online or degraded. offline comes either from IoTKit at graceful shutdown (with a timestamp) or from the Broker's Will (timestamp null).",
+  "$defs": {
+    "topic": {
+      "type": "string",
+      "pattern": "^iotkit/v1/edge-node/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?/status$"
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["timestamp", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": { "type": "integer", "minimum": 0 },
+        "value": { "type": "string", "enum": ["online", "degraded"] }
+      }
+    },
+    "offline-graceful": {
+      "type": "object",
+      "required": ["timestamp", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": { "type": "integer", "minimum": 0 },
+        "value": { "const": "offline" }
+      }
+    },
+    "offline-will": {
+      "description": "Published by the Broker on abnormal disconnect. timestamp is null because IoTKit did not observe the disconnect time.",
+      "type": "object",
+      "required": ["timestamp", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "timestamp": { "type": "null" },
+        "value": { "const": "offline" }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/offline-graceful" },
+    { "$ref": "#/$defs/offline-will" }
+  ]
+}

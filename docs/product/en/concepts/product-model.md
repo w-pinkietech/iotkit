@@ -5,7 +5,7 @@ description: "Defines the complete product scope, component responsibilities, au
 language: en
 translation_key: concepts.product-model
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit product model
@@ -92,3 +92,25 @@ infrastructure.
 
 BravePI and Pinikiet are the first verified integrations. Neither defines IoTKit's
 generic core model.
+
+## Observation model (device-local redesign)
+
+In the redesign of [#232](https://github.com/w-pinkietech/iotkit/issues/232), IoTKit runs as one instance per device, converts sensor input into Observations inside the device, and publishes them to a standard MQTT Broker. The central IoTKit Edge and the per-application Output Adapters described in the sections above are deleted when that redesign completes. This section defines the Observation model that remains, independent of any protocol. Its mapping onto MQTT is in the [MQTT Output Adapter contract v1](../contracts/mqtt-output-adapter-v1.md).
+
+An Observation is one value produced by one processing pipeline inside the device. A pipeline converts Input Adapter output through calibration, thresholding, hysteresis, debounce, and accumulated counting, and is identified by a pipeline-id. One pipeline has one output; several pipelines may read the same input.
+
+The kinds are fixed to three. Business meaning such as production, alarm, or Gantt is not part of IoTKit; the receiving side assigns it.
+
+| kind | value | Unit |
+|---|---|---|
+| measurement | A numeric value measured at one point in time | Pipeline configuration; not in the payload |
+| accumulated-count | A cumulative integer ≥ 0 computed by the pipeline | Treated as a count |
+| state | A boolean current state | None |
+
+Continuity and order are expressed by three fields.
+
+- **series**: one continuous generation of the same pipeline output. It does not change on display-name or threshold tuning, Broker configuration, process restart, or reconnect. It changes on structural edits (kind, input, trigger, unit), an explicit reset, importing definitions, or loss of state. A new accumulated-count series starts at `value = 0` and publishes that first value immediately.
+- **sequence**: an integer starting at 1 within a series and increasing by 1 per publication. Ordering and de-duplication use it.
+- **timestamp**: the real time at which the device received the input that settled the output. It can move backwards after a clock correction, so it is not used for ordering.
+
+Observations are not stored long-term on the device. The device keeps only evaluation state, the current accumulated value or state, the series, the next sequence, and unsent publications; history belongs to the receiving application.

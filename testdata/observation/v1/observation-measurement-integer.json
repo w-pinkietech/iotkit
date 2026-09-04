@@ -1,0 +1,9 @@
+{
+  "description": "measurement whose value happens to be integral. JSON number without a fraction is still a measurement.",
+  "channel": "observation",
+  "kind": "measurement",
+  "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-temperature/measurement",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":43,\"timestamp\":1784190001123,\"value\":24}"
+}

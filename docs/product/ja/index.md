@@ -15,6 +15,7 @@
 * [Edge Node保管責任契約 v1](contracts/edge-node-custody-v1.md) - Edge NodeからIoTKit Edgeへの完全な耐久配送契約です。
 * [Input Adapter契約 v1](contracts/input-adapter-v1.md) - センサー統合をコアから分離する完全な境界です。
 * [Output Adapter契約 v1](contracts/output-adapter-v1.md) - 外部application向けの完全な変換契約です。
+* [MQTT Output Adapter契約 v1](contracts/mqtt-output-adapter-v1.md) - 端末完結の再設計でObservationとstatusを標準MQTT Brokerへ公開する契約です。
 * [v1互換性方針](contracts/compatibility-policy-v1.md) - 製品1.0.0から始まる互換性約束を定義します。
 
 ## 運用

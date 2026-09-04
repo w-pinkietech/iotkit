@@ -22,9 +22,9 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
 
-# Two lanes run on every PR; there is no changed-path selection. The end-to-end
-# lane (sample Input Adapter -> IoTKit -> Broker -> independent consumer) is
-# added when the redesign in #232 can publish, and stays required from then on.
+# Three lanes run on every PR; there is no changed-path selection. The journey
+# lane grows into the full end-to-end test (sample Input Adapter -> IoTKit ->
+# Broker -> independent consumer) when the redesign in #232 can publish.
 # Policy: .agents/testing.md
 jobs:
   lightweight:
@@ -56,6 +56,9 @@ jobs:
 
       - name: Product documentation regression tests
         run: node --test scripts/tests/check-product-docs.test.mjs
+
+      - name: MQTT Output Adapter v1 fixtures (schema and canonical form)
+        run: node scripts/check-observation-fixtures.mjs
 
       - name: Trial profile configuration contract
         run: python3 -m unittest scripts.tests.test_iotkit_trial
@@ -149,24 +152,36 @@ jobs:
       - name: Doc tests
         run: cargo test --workspace --doc --no-fail-fast
 
-  # Stable required check for branch protection: both lanes must succeed.
+  # Journey lane. Today it is the receiving half: the contract fixtures are
+  # published to a real Mosquitto and checked at the subscriber. #232 child
+  # issue 4 replaces the publisher with the IoTKit process (L1 and L2).
+  journey:
+    name: journey (MQTT Output Adapter v1 consumer check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish fixtures to Mosquitto and verify at the subscriber
+        run: scripts/test-observation-consumer.sh
+
+  # Stable required check for branch protection: every lane must succeed.
   required-ci:
     name: required CI
     if: ${{ always() }}
-    needs: [lightweight, check]
+    needs: [lightweight, check, journey]
     runs-on: ubuntu-latest
     steps:
-      - name: Require both lanes
+      - name: Require every lane
         env:
           LIGHTWEIGHT_RESULT: ${{ needs.lightweight.result }}
           CHECK_RESULT: ${{ needs.check.result }}
+          JOURNEY_RESULT: ${{ needs.journey.result }}
         run: |
           set -euo pipefail
-          [[ "$LIGHTWEIGHT_RESULT" == "success" ]] || {
-            echo "lightweight must succeed (was $LIGHTWEIGHT_RESULT)" >&2
-            exit 1
-          }
-          [[ "$CHECK_RESULT" == "success" ]] || {
-            echo "check must succeed (was $CHECK_RESULT)" >&2
-            exit 1
-          }
+          for lane in lightweight check journey; do
+            var="${lane^^}_RESULT"
+            [[ "${!var}" == "success" ]] || {
+              echo "$lane must succeed (was ${!var})" >&2
+              exit 1
+            }
+          done

@@ -1,0 +1,7 @@
+{
+  "channel": "observation",
+  "kind": "state",
+  "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-temperature-high/state",
+  "payload": "{\"series_id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"sequence\":1,\"timestamp\":1,\"value\":true}",
+  "reason": "series_id is at most 64 bytes"
+}

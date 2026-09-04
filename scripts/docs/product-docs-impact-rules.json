@@ -102,6 +102,19 @@
       "rationale": "Output Adapter packages, meanings, semantic history, or external publish path."
     },
     {
+      "id": "mqtt-output-adapter-contract",
+      "path_prefixes": [
+        "testdata/observation/",
+        "scripts/check-observation-fixtures.mjs",
+        "scripts/test-observation-consumer.sh"
+      ],
+      "doc_paths": [
+        "contracts/mqtt-output-adapter-v1.md",
+        "concepts/product-model.md"
+      ],
+      "rationale": "MQTT Output Adapter v1 schema, fixtures, or conformance checks changed; the contract document and the Observation model may need the same change."
+    },
+    {
       "id": "console-and-edge-surface",
       "path_prefixes": [
         "edge/frontend/",

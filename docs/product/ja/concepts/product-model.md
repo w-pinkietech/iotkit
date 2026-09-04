@@ -5,7 +5,7 @@ description: "IoTKitの完全な製品範囲、component責務、権威の流れ
 language: ja
 translation_key: concepts.product-model
 status: stable
-revision: 2
+revision: 3
 ---
 
 # IoTKit製品モデル
@@ -60,3 +60,25 @@ BrokerはIoTKit Edgeと同じhostにも別hostにも配置できます。Hostnam
 - Wire fieldやrecord familyは、cross-language conformance fixtureを伴うversioned contract変更でだけ追加する。
 
 BravePIとPinikietは最初に検証したintegrationです。どちらもIoTKitの汎用core modelを定義しません。
+
+## Observationモデル（端末完結の再設計）
+
+[#232](https://github.com/w-pinkietech/iotkit/issues/232) の再設計では、IoTKitはハードウェア1台につき1インスタンスで動き、端末の中でセンサー入力をObservationへ変換して標準のMQTT Brokerへ公開する。上の節が説明する中央のIoTKit Edgeと業務アプリケーション別のOutput Adapterは、この再設計の完了とともに削除される。本節はその後も残るObservationのモデルを、プロトコルに依存しない形で定める。MQTTへの写し方は[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)にある。
+
+Observationは、端末内の1つの処理pipelineが出力する1つの値である。pipelineはInput Adapterの出力を校正、二値化、ヒステリシス、デバウンス、累積カウントで変換し、pipeline-idで識別される。pipeline 1つにつき出力は1つで、複数のpipelineが同じ入力を参照できる。
+
+kindは次の3つに固定する。production、alarm、Ganttなどの業務上の意味はIoTKitに入れず、受信側が対応付ける。
+
+| kind | value | 単位 |
+|---|---|---|
+| measurement | ある時点で計測した数値 | pipeline設定に置き、payloadには含めない |
+| accumulated-count | pipelineが算出した0以上の累積整数 | countとして扱う |
+| state | 現在の状態を表すboolean | 持たない |
+
+Observationは次の3つで連続性と順序を表す。
+
+- **series**：同じpipeline出力の連続した世代。表示名や閾値などの調整、Broker設定、プロセス再起動、再接続では変わらない。kind、入力、trigger、単位といった構造の変更、明示的なリセット、定義のimport、状態の喪失で新しいseriesを始める。accumulated-countの新しいseriesは`value = 0`から始まり、その最初の値を即時公開する。
+- **sequence**：series内で1から始まり、公開ごとに1増える整数。順序の判定と重複排除はこれで行う。
+- **timestamp**：その出力を確定させた入力を端末が受信した実時刻。時計補正で逆行することがあるため順序には使わない。
+
+Observationは端末に長期保存しない。端末は評価状態、現在の累積値またはstate、series、次のsequence、未送信のpublicationだけを保持し、履歴の保存は受信側のアプリケーションが所有する。

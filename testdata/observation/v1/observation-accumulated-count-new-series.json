@@ -1,0 +1,10 @@
+{
+  "description": "accumulated-count at the start of a new series: IoTKit publishes sequence 1 with value 0 immediately, so the retained value always represents the current series.",
+  "channel": "observation",
+  "kind": "accumulated-count",
+  "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-cycle-count/accumulated-count",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"series_id\":\"018f5f83-9c10-7d02-8e3a-1b2c3d4e5f60\",\"sequence\":1,\"timestamp\":1784190100000,\"value\":0}",
+  "consumer_note": "Store 0 as the baseline of the new series and discard the previous series' highest sequence. A series change is a baseline update, not an anomaly."
+}

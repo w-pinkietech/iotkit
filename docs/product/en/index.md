@@ -15,6 +15,7 @@
 * [Edge Node custody contract v1](contracts/edge-node-custody-v1.md) - Complete durable-delivery contract from an Edge Node to IoTKit Edge.
 * [Input Adapter contract v1](contracts/input-adapter-v1.md) - Complete boundary that separates sensor integration from the core.
 * [Output Adapter contract v1](contracts/output-adapter-v1.md) - Complete transformation contract for external applications.
+* [MQTT Output Adapter contract v1](contracts/mqtt-output-adapter-v1.md) - How the device-local redesign publishes Observations and status to a standard MQTT Broker.
 * [v1 compatibility policy](contracts/compatibility-policy-v1.md) - Defines the compatibility promise that begins with product 1.0.0.
 
 ## Operations
