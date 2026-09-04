@@ -22,46 +22,13 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
 
+# Two lanes run on every PR; there is no changed-path selection. The end-to-end
+# lane (sample Input Adapter -> IoTKit -> Broker -> independent consumer) is
+# added when the redesign in #232 can publish, and stays required from then on.
+# Policy: .agents/testing.md
 jobs:
-  changes:
-    name: select CI jobs
-    runs-on: ubuntu-latest
-    outputs:
-      rust: ${{ steps.select.outputs.rust }}
-      console: ${{ steps.select.outputs.console }}
-      edge: ${{ steps.select.outputs.edge }}
-      trial: ${{ steps.select.outputs.trial }}
-      packages: ${{ steps.select.outputs.packages }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: jdx/mise-action@v4
-        with:
-          version: 2026.8.4
-          install_args: node
-
-      - name: Classify changed paths
-        id: select
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [[ -n "$BASE_SHA" &&
-                ! "$BASE_SHA" =~ ^0+$ &&
-                -n "$HEAD_SHA" ]] &&
-             git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null &&
-             git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
-            git diff --name-only "$BASE_SHA" "$HEAD_SHA" |
-              node scripts/select-ci-jobs.mjs >> "$GITHUB_OUTPUT"
-          else
-            node scripts/select-ci-jobs.mjs </dev/null >> "$GITHUB_OUTPUT"
-          fi
-
   lightweight:
     name: lightweight repository checks
-    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,30 +97,18 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           # Soft only: the script always exits 0 and may emit ::warning::.
-          # Hard fail for high-risk paths is a later issue, not this step.
           node scripts/product-docs-impact.mjs soft-check \
             --base "${{ github.event.pull_request.base.sha }}" \
             --pr-body-env PR_BODY
 
-      - name: Selective CI routing
-        run: node --test scripts/tests/select-ci-jobs.test.mjs
-
-      - name: Verification ownership policy
-        run: node --test scripts/tests/verification-policy.test.mjs
-
       - name: Codex Cloud wrapper regression
         run: scripts/test-codex-cloud.sh
-
-      - name: Rust Edge release-gate contracts
-        run: node --test scripts/tests/rust-edge-release-gates.test.mjs
 
       - name: Local Rust concurrency defaults
         run: node --test scripts/tests/rust-concurrency.test.mjs
 
   check:
     name: fmt / clippy / test
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -181,177 +136,37 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Formatting (cargo fmt --check)
-        # Full tree; fmt is seconds, not the bottleneck.
         run: cargo fmt --all --check
 
       - name: Lints (cargo clippy -D warnings)
-        env:
-          PACKAGES: ${{ needs.changes.outputs.packages }}
-        run: |
-          set -euo pipefail
-          if [[ "$PACKAGES" == "all" || -z "$PACKAGES" ]]; then
-            cargo clippy --workspace --all-targets -- -D warnings
-          else
-            args=()
-            IFS=',' read -ra pkgs <<< "$PACKAGES"
-            for p in "${pkgs[@]}"; do
-              args+=(-p "$p")
-            done
-            cargo clippy "${args[@]}" --all-targets -- -D warnings
-          fi
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       # No separate full workspace build: nextest compiles what it needs.
-      # Path-focused package lists (not "all") skip the ~1300-test wall.
       - name: Tests (nextest)
-        env:
-          PACKAGES: ${{ needs.changes.outputs.packages }}
-        run: |
-          set -euo pipefail
-          if [[ "$PACKAGES" == "all" || -z "$PACKAGES" ]]; then
-            cargo nextest run --workspace --profile ci
-          else
-            args=()
-            IFS=',' read -ra pkgs <<< "$PACKAGES"
-            for p in "${pkgs[@]}"; do
-              args+=(-p "$p")
-            done
-            cargo nextest run "${args[@]}" --profile ci
-          fi
+        run: cargo nextest run --workspace --profile ci
 
       # nextest does not run rustdoc tests; keep them as a cheap separate pass.
       - name: Doc tests
-        env:
-          PACKAGES: ${{ needs.changes.outputs.packages }}
-        run: |
-          set -euo pipefail
-          if [[ "$PACKAGES" == "all" || -z "$PACKAGES" ]]; then
-            cargo test --workspace --doc --no-fail-fast
-          else
-            args=()
-            IFS=',' read -ra pkgs <<< "$PACKAGES"
-            for p in "${pkgs[@]}"; do
-              args+=(-p "$p")
-            done
-            cargo test "${args[@]}" --doc --no-fail-fast
-          fi
+        run: cargo test --workspace --doc --no-fail-fast
 
-  # Console UI lane: frontend check + browser e2e only (#166).
-  # Custody/output live in the edge job so pure Console PRs stay shorter.
-  console:
-    name: Console frontend and browser journey
-    needs: changes
-    if: needs.changes.outputs.console == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: jdx/mise-action@v4
-        with:
-          version: 2026.8.4
-
-      - name: Cache Console npm
-        uses: actions/cache@v6
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('edge/frontend/package-lock.json') }}
-
-      - name: Install Console tooling
-        run: npm ci --prefix edge/frontend
-
-      - name: Console schema, types, and generated assets
-        run: scripts/test-edge-console-frontend.sh
-
-      - name: IoTKit Console browser journey
-        run: scripts/test-edge-console-e2e.sh
-
-  edge:
-    name: Edge custody and output integration
-    needs: changes
-    if: needs.changes.outputs.edge == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: jdx/mise-action@v4
-        with:
-          version: 2026.8.4
-
-      # Unit/integration for iotkit-edge run in the rust job when rust=true.
-      # This job is custody + durable output only (Console is the console job).
-
-      - name: PostgreSQL, MQTT custody, and authentication
-        run: scripts/test-rust-edge-custody.sh
-
-      - name: Durable output delivery
-        run: scripts/test-edge-output.sh
-
-      - name: Edge Node SIGTERM shutdown
-        run: scripts/test-edge-node-sigterm.sh
-
-  trial:
-    name: Trial profile first-run and custody journey
-    needs: changes
-    if: needs.changes.outputs.trial == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: jdx/mise-action@v4
-        with:
-          version: 2026.8.4
-
-      - name: Trial profile first-run and custody journey
-        run: scripts/test-iotkit-trial.sh
-
-  # Stable required check: a selected lane must succeed; an unselected optional
-  # lane is skipped. `changes` fails closed to all lanes when diff metadata or
-  # CI infrastructure is unsafe, so omitting a lane here is a policy failure.
+  # Stable required check for branch protection: both lanes must succeed.
   required-ci:
     name: required CI
     if: ${{ always() }}
-    needs: [changes, lightweight, check, console, edge, trial]
+    needs: [lightweight, check]
     runs-on: ubuntu-latest
     steps:
-      - name: Require mandatory and selected lanes
+      - name: Require both lanes
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
           LIGHTWEIGHT_RESULT: ${{ needs.lightweight.result }}
           CHECK_RESULT: ${{ needs.check.result }}
-          CONSOLE_RESULT: ${{ needs.console.result }}
-          EDGE_RESULT: ${{ needs.edge.result }}
-          TRIAL_RESULT: ${{ needs.trial.result }}
-          RUST_SELECTED: ${{ needs.changes.outputs.rust }}
-          CONSOLE_SELECTED: ${{ needs.changes.outputs.console }}
-          EDGE_SELECTED: ${{ needs.changes.outputs.edge }}
-          TRIAL_SELECTED: ${{ needs.changes.outputs.trial }}
         run: |
           set -euo pipefail
-          [[ "$CHANGES_RESULT" == "success" ]] || {
-            echo "changes must succeed (was $CHANGES_RESULT)" >&2
-            exit 1
-          }
           [[ "$LIGHTWEIGHT_RESULT" == "success" ]] || {
             echo "lightweight must succeed (was $LIGHTWEIGHT_RESULT)" >&2
             exit 1
           }
-          check_lane() {
-            local name=$1 selected=$2 result=$3
-            if [[ "$selected" == "true" ]]; then
-              [[ "$result" == "success" ]] || {
-                echo "$name was selected but did not succeed (was $result)" >&2
-                exit 1
-              }
-            elif [[ "$selected" == "false" ]]; then
-              [[ "$result" == "skipped" ]] || {
-                echo "$name was not selected but did not skip (was $result)" >&2
-                exit 1
-              }
-            else
-              echo "$name has unsafe selector output: $selected" >&2
-              exit 1
-            fi
+          [[ "$CHECK_RESULT" == "success" ]] || {
+            echo "check must succeed (was $CHECK_RESULT)" >&2
+            exit 1
           }
-          check_lane rust "$RUST_SELECTED" "$CHECK_RESULT"
-          check_lane console "$CONSOLE_SELECTED" "$CONSOLE_RESULT"
-          check_lane edge "$EDGE_SELECTED" "$EDGE_RESULT"
-          check_lane trial "$TRIAL_SELECTED" "$TRIAL_RESULT"

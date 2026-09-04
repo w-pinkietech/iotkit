@@ -27,36 +27,36 @@ executes one perspective; it does not replace the suite entry.
 
 ## Verification
 
-Verification must match the changed failure paths. For routine Rust work, run
-the closest focused test and package lint needed for immediate feedback; the
-selected CI lane is the authoritative independent merge evidence.
-`scripts/verify.sh --workspace` is an opt-in cross-workspace diagnosis, not an
-unconditional Rust-change default. Documentation-only changes may use
-documentation, link, structure, and diff checks. Release and field suites have
-one default owner in the
-[verification ownership matrix](../.github/verification-ownership.md). When
-skipping a check normally expected for the change, state the check and the
-concrete reason.
+Verification is the acceptance evidence the issue names: the journey stage that
+must pass and the unit tests that stay ([`testing.md`](testing.md)). For
+immediate feedback, run the owning package's tests and lint; CI (lightweight
+checks plus the full Rust workspace, and the journey once it exists) is the
+authoritative merge evidence. `scripts/verify.sh --workspace` is an opt-in
+cross-workspace diagnosis. Documentation-only changes may use documentation,
+link, structure, and diff checks. When skipping a check normally expected for
+the change, state the check and the concrete reason.
 
 Tests passing are necessary, not sufficient: also compare the result with current
 contracts and the [product invariants](product-invariants.md).
 
 ## Codex implementation roles
 
-For every routine Codex task, keep acceptance verification and review outside the
-implementation agent’s ownership. Select the implementation role by task shape,
-then follow this order:
+For every routine Codex task, keep acceptance verification outside the
+implementation agent’s ownership. Select the implementation role by task shape:
 
 | Concern | Owner |
 |---|---|
-| Implement routine settled task + focused tests | `implementer` |
-| Implement context-heavy or higher-risk settled task + focused tests | `complex_implementer` |
+| Implement routine settled task + the tests the issue names | `implementer` |
+| Implement context-heavy or higher-risk settled task + the tests the issue names | `complex_implementer` |
 | Fresh command evidence and acceptance | Main |
 | Independent findings (spec and/or quality) | `reviewer` (read-only) |
 
-Main retains orchestration, architecture, policy, and final acceptance. If review
-requests changes, return to the selected implementation role, rerun Main's fresh
-verification, and obtain a new independent review.
+Independent review is for work that touches a public contract or can lose data.
+For #232 that is child issues 1 (contract), 3 (core), and 4 (MQTT Output
+Adapter); TOML, deletion, and Console (2, 5, 6) are accepted on Main's diff
+inspection and CI. Main retains orchestration, architecture, policy, and final
+acceptance. If review requests changes, return to the selected implementation
+role, rerun Main's fresh verification, and obtain a new independent review.
 
 Orchestration, handoff checklist, and Superpowers skill mapping:
 [`.codex/README.md`](../.codex/README.md).

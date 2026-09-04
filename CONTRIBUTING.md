@@ -184,7 +184,8 @@ Every development task uses the following loop:
 1. Create or select one GitHub issue with a clear outcome and exclusions.
 2. Update local `master`, then create `agent/issue-<number>-<slug>`.
 3. Create `.worktrees/issue-<number>-<slug>` and work only there.
-4. Add or update the closest focused test before changing product behavior.
+4. Name the acceptance evidence in the issue: the journey stage and the unit
+   tests that must pass (see `.agents/testing.md`).
 5. Keep the diff inside the issue scope. Open another issue when the scope
    changes materially.
 6. Commit, push the branch, and open a draft pull request that closes the issue.
@@ -264,15 +265,15 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
 scripts/test-edge-postgres.sh
 ```
 
-For routine Rust behavior, start with the closest focused test and lint. CI
-selects the authoritative changed-scope Rust, Console, Edge, and trial lanes;
-do not substitute a reported local pass for it. Use
-`scripts/verify.sh --workspace` only for an explicit cross-workspace diagnosis.
+CI runs the lightweight repository checks and the full Rust workspace on every
+pull request; a reported local pass does not substitute for it. Use
+`scripts/verify.sh --workspace` for an explicit cross-workspace diagnosis.
 Documentation-only changes normally need the documentation checker, link/command
 inspection, and `git diff --check`. Run
-`scripts/test-edge-host-release-gate.sh` once for a release candidate, not for
-every pull request. The complete owner and runtime policy is in the
-[verification ownership matrix](.github/verification-ownership.md).
+`scripts/test-edge-host-release-gate.sh` once for a release candidate of the
+current product, not for every pull request. Which tests to write, and which
+end-to-end test is the acceptance evidence, is defined in
+[`.agents/testing.md`](.agents/testing.md).
 
 ## Generated files and contract changes
 

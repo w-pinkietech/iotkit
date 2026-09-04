@@ -195,13 +195,14 @@ scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
 
 IoTKit ConsoleはRustの型付きserver-side renderingを使い、browser動作を`edge/frontend/src/`のTypeScriptで実装します。JSON API型は`edge/openapi/edge-console-v1.yaml`から生成します。配布物にはesbuild済みの`static/console.js`を埋め込むため、IoTKit Edgeの実行環境にNode.jsは不要です。
 
-CIは変更範囲に応じてRust、Console、Edge、trial laneを選び、各PRで安定した
-`required CI` aggregateを公開します（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。
-unknown pathとCI infrastructureの変更は全laneへfail closedします。localではfocused checkを
-実行し、`scripts/verify.sh --workspace`は通常のPR sweepではなく明示的な診断だけに使います。
-Docker、PostgreSQL、Broker障害を含む統合検証は、release前に
-`test-edge-host-release-gate.sh`を一度実行します。既定ownerと想定runtimeは
-[検証所有マトリクス](.github/verification-ownership.md)にあります。
+CIは各PRで、軽量なrepositoryチェックとRust workspace全体（fmt、clippy、テスト）の
+2つのlaneを実行し、安定した`required CI` aggregateを公開します
+（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）。sample Input Adapterから
+Brokerを経て独立したconsumerまで製品を動かす一気通貫テストは、
+[#232](https://github.com/w-pinkietech/iotkit/issues/232)の再設計がpublishできる段階で
+CIに加えます。テスト方針は[`.agents/testing.md`](.agents/testing.md)にあります。
+localでは`scripts/verify.sh --workspace`を明示的な診断に使い、現行製品のrelease前には
+`test-edge-host-release-gate.sh`を一度実行します。
 
 ## Repository構成
 

@@ -259,14 +259,15 @@ generated from `edge/openapi/edge-console-v1.yaml`. The distribution embeds
 the esbuild output as `static/console.js`, so the IoTKit Edge runtime does not
 require Node.js.
 
-CI selects changed-scope Rust, Console, Edge, and trial lanes and publishes the
-stable `required CI` aggregate on every PR (see
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Unknown paths and CI
-infrastructure changes fail closed to all lanes. Run focused checks locally;
-`scripts/verify.sh --workspace` is an opt-in diagnosis, not a routine PR sweep.
-Run `test-edge-host-release-gate.sh` once before release for Docker,
-PostgreSQL, and Broker integration coverage. The complete default ownership and
-runtime policy is in the [verification ownership matrix](.github/verification-ownership.md).
+CI runs two lanes on every PR, lightweight repository checks and the full Rust
+workspace (fmt, clippy, tests), and publishes the stable `required CI`
+aggregate (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). The
+end-to-end test that drives the product from a sample Input Adapter through the
+Broker to an independent consumer joins CI once the redesign in
+[#232](https://github.com/w-pinkietech/iotkit/issues/232) can publish; the
+test policy is in [`.agents/testing.md`](.agents/testing.md). Run
+`scripts/verify.sh --workspace` locally for an explicit diagnosis, and
+`test-edge-host-release-gate.sh` once before a release of the current product.
 
 ## Repository layout
 

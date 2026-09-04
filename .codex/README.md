@@ -55,10 +55,10 @@ Main inspects the actual diff and reruns the specified verification commands fro
 a fresh Main turn before acceptance. Reviewer findings are independent judgment;
 they do not replace Main's command evidence.
 
-Focused checks are the normal implementation evidence. Do not make
+The tests the issue names are the implementation evidence
+([`.agents/testing.md`](../.agents/testing.md)). Do not make
 `scripts/verify.sh --workspace` a routine delegated-task sweep; it is an
-explicit diagnosis. The `required CI` aggregate owns selected remote acceptance;
-see the [verification ownership matrix](../.github/verification-ownership.md).
+explicit diagnosis. The `required CI` aggregate owns remote acceptance.
 
 ## Routine implementation loop
 
@@ -70,20 +70,20 @@ Main: settle task text, interfaces, constraints, and verification commands;
       select implementer or complex_implementer
   → selected implementation lane: implement + focused self-check only
   → Main: inspect the diff and rerun the required commands (fresh evidence)
-  → reviewer: mode=spec-compliance against issue/spec/task
-       if changes-requested → selected implementation lane → Main verification → reviewer (same mode)
-  → reviewer: mode=quality (or one full pass if Main prefers a single review)
+  → [contract or data-loss work only] reviewer: mode=spec-compliance, then mode=quality
        if changes-requested → selected implementation lane → Main verification → reviewer
   → Main: final acceptance; mark task done; next task
 After all tasks:
   → Main: broader verification warranted by risk
-  → reviewer: mode=full on the whole branch/PR diff
+  → [contract or data-loss work only] reviewer: mode=full on the whole branch/PR diff
   → Main: draft PR, product-doc impact, stop for human review
 ```
 
-Any tracked diff change after a review invalidates that verdict. Run the relevant
-Main verification commands again and obtain a fresh review before relying on
-approval.
+Independent review applies to work that touches a public contract or can lose
+data (for #232: child issues 1, 3, and 4). Other work is accepted on Main's
+diff inspection and CI. Any tracked diff change after a review invalidates that
+verdict. Run the relevant Main verification commands again and obtain a fresh
+review before relying on approval.
 
 ### Mapping from Superpowers skills
 

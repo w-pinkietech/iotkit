@@ -56,9 +56,8 @@ git status --short --branch
 
 The checker refuses a tag that does not exactly equal `v` plus the workspace
 version. The worktree must be clean before continuing. The host gate owns the
-release integration suites; field/manual recovery, fencing, and hardware
-evidence remain outside the release default. See the
-[verification ownership matrix](.github/verification-ownership.md).
+release integration suites of the current product; field/manual recovery,
+fencing, and hardware evidence remain outside the release default.
 
 ## Publish from the merged commit
 

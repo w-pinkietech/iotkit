@@ -42,20 +42,21 @@ Default is lightweight. Choose the lightest lane that covers realistic risk.
 Create a durable design or plan only when the criteria below call for one or the
 user asks for it.
 
-For every product behavior change, add or update the closest focused test
-before implementation.
+The issue lists the acceptance evidence: which journey stage, and which of the
+unit tests that stay, must pass. The implementer writes the smallest test that
+satisfies it. See [`testing.md`](testing.md).
 
 | Lane | Use for | Required process |
 |---|---|---|
-| Fast | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; focused test when behavior changes; focused verification; PR. Update `docs/product/` ja+en when operator-, integrator-, or contract-visible facts change; otherwise record a no-update reason |
-| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | short decision note with goal, non-goals, chosen approach, and verification; use `docs/superpowers/specs/` when those choices need durable reviewed context; one review; proportional tests; lasting decisions in `docs/product/` or paired contract artifacts |
-| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority; use a supporting `docs/superpowers/specs/` artifact when design choices need approval before implementation; tests first; independent review; broad verification; an implementation plan only for many ordered slices or irreversible steps; ship corpus, schema/types, fixtures, and tests as one contract unit |
+| Fast | local bug, refactor, docs, CI, configuration, or small feature without contract/security/custody/migration/restore impact | issue outcome and exclusions; acceptance evidence named in the issue; PR. Update `docs/product/` ja+en when operator-, integrator-, or contract-visible facts change; otherwise record a no-update reason |
+| Standard | multiple packages, a new internal boundary, several credible implementations, or product UX with real design choices | short decision note with goal, non-goals, chosen approach, and verification; use `docs/superpowers/specs/` when those choices need durable reviewed context; one review; lasting decisions in `docs/product/` or paired contract artifacts |
+| Full | public wire contract, auth/secrets, custody/data loss, DB migration, backup/restore/rollback, destructive or expensive compatibility decisions | short explicit design in the owning current authority; use a supporting `docs/superpowers/specs/` artifact when design choices need approval before implementation; acceptance evidence listed per child issue; independent review; an implementation plan only for many ordered slices or irreversible steps; ship corpus, schema/types, fixtures, and tests as one contract unit |
 
-Every lane keeps the scoped issue, product invariants, focused behavior tests,
-product-doc impact, human merge approval, and risk-matched verification.
-Run focused checks first; the stable `required CI` aggregate is the remote
-authority for selected PR lanes. `scripts/verify.sh --workspace` is an opt-in
-diagnosis, not a routine acceptance sweep. The exact `/auto-merge` comment from
+Every lane keeps the scoped issue, product invariants, product-doc impact,
+human merge approval, and risk-matched verification. The stable `required CI`
+aggregate (lightweight checks plus the full Rust workspace, and the journey once
+it exists) is the remote authority. `scripts/verify.sh --workspace` is an
+opt-in diagnosis, not a routine acceptance sweep. The exact `/auto-merge` comment from
 a human `User` account with an `OWNER`, `MEMBER`, or `COLLABORATOR` association
 and effective repository permission of `admin`, `maintain`, or `write` on an
 eligible PR is an explicit human approval action: it posts `human approval`
@@ -65,8 +66,7 @@ ready-for-review, or synchronized PR head gets a pending `human approval`
 status. New commits disarm it and reset that status to pending, so an authorized
 maintainer must leave a new exact comment after reviewing the updated PR.
 Default-branch protection must require `required CI`, `human approval`, and
-CodeQL. See the
-[verification ownership matrix](../.github/verification-ownership.md).
+CodeQL.
 
 ### Process weight and optional harnesses
 
@@ -97,11 +97,12 @@ CodeQL. See the
 ### Codex implementation roles
 
 For every routine Codex task or plan task, Main must **separate** roles:
-**implementer** or **complex_implementer** (code + focused tests selected by
-task shape), **Main** (fresh verification evidence and acceptance), and
-**reviewer** (independent findings). Do not let an implementation subagent
-self-verify the full gate or self-approve. Main retains orchestration,
-architecture, policy, and final acceptance. Dispatch order and handoff fields
-live in [`.codex/README.md`](../.codex/README.md).
+**implementer** or **complex_implementer** (code + the tests the issue names,
+selected by task shape), **Main** (fresh verification evidence and acceptance),
+and **reviewer** (independent findings, for work that touches a public contract
+or can lose data). Do not let an implementation subagent self-verify the full
+gate or self-approve. Main retains orchestration, architecture, policy, and
+final acceptance. Dispatch order and handoff fields live in
+[`.codex/README.md`](../.codex/README.md).
 
 Return to [`AGENTS.md`](../AGENTS.md).
