@@ -5,7 +5,7 @@ description: "IoTKitの構成要素、識別子、配送責任に使う主要な
 language: ja
 translation_key: concepts.terminology
 status: stable
-revision: 1
+revision: 2
 ---
 
 # IoTKit用語
@@ -24,5 +24,6 @@ revision: 1
 | series | 同じ対象・測定を時系列として連続的に扱う単位です。 |
 | observation | 時刻、値、型、identityを持つ一回の観測です。 |
 | quarantine | 保存はするが、解除されるまで外部配送やルール評価に使わない状態です。 |
+| 一気通貫テスト | 起動から確認までを一続きに通す統合テストです。sample Input Adapterから入った値がBrokerを経て独立したconsumerに届くまでを1本のスクリプトで検証し、受け入れ証拠の中心とします。英語ではjourneyと呼びます。 |
 
 「gateway」は製品構成要素の正式名称として使いません。IoTKit Edge Nodeは単なる中継器ではなく耐久バッファを持ち、IoTKit Edgeは集約・意味付け・外部出力を担うためです。

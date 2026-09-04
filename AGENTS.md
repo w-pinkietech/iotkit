@@ -70,17 +70,20 @@ and PR content:
    never silently lose data, route mutations through typed operations, and do
    not confuse MQTT PUBACK with durable IoTKit acceptance. See
    [`.agents/product-invariants.md`](.agents/product-invariants.md).
-5. **Use the lightest sufficient process** — Fast is the default. Add or update
-   the closest focused test before changing product behavior, then widen
-   verification only for realistic risk. See [`.agents/workflow.md`](.agents/workflow.md).
+5. **Use the lightest sufficient process** — Fast is the default. Acceptance
+ evidence is the end-to-end journey (一気通貫テスト); write a unit test only
+ where a journey cannot practically reach. Widen verification only for
+ realistic risk. See [`.agents/testing.md`](.agents/testing.md) and
+ [`.agents/workflow.md`](.agents/workflow.md).
 6. **Split routine Codex development** — Fast-lane work uses the lightweight
-   `implementer` (Luna) by default; Main does not implement Fast work directly.
-   Route only actual context-heavy or higher-risk settled work to
-   `complex_implementer`, independent of the Fast/Standard/Full process lane.
-   Main reruns fresh acceptance verification and owns final acceptance;
-   `reviewer` supplies independent findings. Main retains read-only
-   investigation plus issue, architecture, policy, and orchestration ownership.
-   See [`.codex/README.md`](.codex/README.md).
+ `implementer` (Luna) by default; Main does not implement Fast work directly.
+ Route only actual context-heavy or higher-risk settled work to
+ `complex_implementer`, independent of the Fast/Standard/Full process lane.
+ Main reruns fresh acceptance verification and owns final acceptance;
+ `reviewer` supplies independent findings for work that touches a public
+ contract or can lose data, not for every task. Main retains read-only
+ investigation plus issue, architecture, policy, and orchestration ownership.
+ See [`.codex/README.md`](.codex/README.md).
 
 ## Index
 
@@ -90,6 +93,7 @@ and PR content:
 | Documentation authority and freshness | [`.agents/documentation-authority.md`](.agents/documentation-authority.md) |
 | What to read before editing | [`.agents/change-map.md`](.agents/change-map.md) |
 | Issue loop, worktree, PR, and change lanes | [`.agents/workflow.md`](.agents/workflow.md) |
+| Testing policy (journey stages, unit-test scope, transition CI) | [`.agents/testing.md`](.agents/testing.md) |
 | Common verification commands | [`.agents/commands.md`](.agents/commands.md) |
 | Source and test placement | [`.agents/source-and-tests.md`](.agents/source-and-tests.md) |
 | Review and verification | [`.agents/review-and-verification.md`](.agents/review-and-verification.md) |

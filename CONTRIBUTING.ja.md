@@ -174,7 +174,8 @@ code入口、認証付きHTTP ingest、Console認証、運用、契約に関す�
 1. 成果と対象外が明確なGitHub issueを一つ作るか選ぶ。
 2. local `master`を更新し、`agent/issue-<number>-<slug>`を作る。
 3. `.worktrees/issue-<number>-<slug>`を作り、その中だけで作業する。
-4. 製品動作を変更する前に、最も近いfocused testを追加または更新する。
+4. 受け入れ証拠をissueに書く。どの一気通貫テストの段階と、どの単体テストが通れば
+   完了かを示す（`.agents/testing.md`を参照）。
 5. 差分をissueの範囲に収める。範囲が実質的に変わったら別issueにする。
 6. commitしてbranchをpushし、issueをcloseするdraft pull requestを作る。
 7. そこで停止して人間へreviewを依頼する。
@@ -248,12 +249,12 @@ IOTKIT_TEST_STORAGE_PROFILE=postgres scripts/test-edge-output.sh
 scripts/test-edge-postgres.sh
 ```
 
-通常のRust製品変更では、最も近いfocused testとlintから始めます。CIが変更範囲に応じて
-Rust、Console、Edge、trial laneを選び、これが権威ある検証です。local passで置き換えません。
-`scripts/verify.sh --workspace`は明示的なcross-workspace診断だけに使います。文書だけの変更は
-通常、文書checker、link・command確認、`git diff --check`に絞ります。
-`scripts/test-edge-host-release-gate.sh`はPRごとではなく、release candidateで一度実行します。
-完全なownerと想定runtimeは[検証所有マトリクス](.github/verification-ownership.md)を参照してください。
+CIは各PRで軽量なrepositoryチェックとRust workspace全体を実行します。これが権威ある検証であり、
+localの合格報告で置き換えません。`scripts/verify.sh --workspace`は明示的なcross-workspace診断に
+使います。文書だけの変更は通常、文書checker、linkとcommandの確認、`git diff --check`に絞ります。
+`scripts/test-edge-host-release-gate.sh`はPRごとではなく、現行製品のrelease candidateで一度実行します。
+どのテストを書くか、どの一気通貫テストを受け入れ証拠とするかは
+[`.agents/testing.md`](.agents/testing.md)に定めます。
 
 ## 生成fileとcontract変更
 

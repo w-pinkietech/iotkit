@@ -1,6 +1,7 @@
 # Common commands
 
 Run the smallest command that can disprove the change, then widen for risk.
+What counts as acceptance evidence is in [`testing.md`](testing.md).
 
 ```bash
 # Documentation, dependency, and source/test structure
@@ -18,32 +19,24 @@ node scripts/product-docs-impact.mjs soft-check --base origin/master --pr-body-f
 # Battle-tested review routing
 node scripts/battle-tested-review.mjs select --base origin/master
 
-# Rust focused / explicit workspace diagnosis
+# Rust: owning package for immediate feedback; CI runs the full workspace
 cargo test -p <crate-name>
 cargo clippy -p <crate-name> --all-targets -- -D warnings
-# Opt-in diagnosis only; not a routine PR command
+# Full-workspace diagnosis (fmt, layers, layout, tests, clippy)
 scripts/verify.sh --workspace
 
-# IoTKit Edge focused / full
-cargo test -p iotkit-edge --test <contract-test>
-cargo test -p iotkit-edge
+# Journey (一気通貫テスト): added by #232 child issue 4; required in CI from then on
+# L1 minimal loop and L2 fault injection run from one script.
 
-# Console schema, generated assets, and browser journey
+# Current product only, until #232 child issue 5 deletes them with their documents
 scripts/test-edge-console-frontend.sh
 scripts/test-edge-console-e2e.sh
-
-# Release-candidate host integration only
 scripts/test-edge-host-release-gate.sh NEW_REPORT_DIRECTORY
 ```
 
-For routine Rust work, use the affected package or contract check first. CI
-selects the authoritative changed-scope Rust, Console, Edge, and trial lanes;
-a local pass does not replace it. `scripts/verify.sh --workspace` runs Rust
-formatting, layer rules, workspace tests, and Clippy with `-D warnings` only
-when an explicit full-workspace diagnosis is useful. The host release gate and
-field evidence are not per-PR defaults; see the
-[verification ownership matrix](../.github/verification-ownership.md).
-Raspberry Pi and physical sensors are required only when the task explicitly
-requires hardware evidence.
+CI runs the lightweight lane and the full Rust lane on every PR; there is no
+changed-path selection, and a local pass does not replace CI. Raspberry Pi and
+physical sensors are required only when the task explicitly requires hardware
+evidence (journey stage L4).
 
 Return to [`AGENTS.md`](../AGENTS.md).

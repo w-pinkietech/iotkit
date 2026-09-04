@@ -5,7 +5,7 @@ description: "Defines the main terms used for IoTKit components, identities, and
 language: en
 translation_key: concepts.terminology
 status: stable
-revision: 1
+revision: 2
 ---
 
 # IoTKit terminology
@@ -24,5 +24,6 @@ revision: 1
 | series | The identity under which observations of the same subject and measurement remain continuous over time. |
 | observation | One timestamped value with a type and identity. |
 | quarantine | A state in which data is stored but excluded from external delivery and rule evaluation until released. |
+| journey | An integration test that runs the product end to end, from start-up to the final check. One script drives a value from the sample Input Adapter through the Broker to an independent consumer; it is the primary acceptance evidence. The Japanese term is 一気通貫テスト. |
 
 “Gateway” is not a formal product component name. An IoTKit Edge Node is more than a relay because it owns a durable buffer, while IoTKit Edge performs aggregation, semantic configuration, and external output.
