@@ -631,7 +631,8 @@ fn restore_fixture_with_schema(schema_version: u32) -> RestoreFixture {
     if schema_version == 23 {
         source
             .execute_batch(
-                "DROP TABLE observation_outbox;
+                "DROP TABLE pipeline_meta;
+                 DROP TABLE observation_outbox;
                  DROP TABLE pipeline_state;
                  DROP TABLE pipeline_definition;
                  DELETE FROM _schema_version WHERE version=25;

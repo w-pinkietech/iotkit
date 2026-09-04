@@ -3,7 +3,7 @@
 //! explicit `nodectl pipeline import`.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,16 @@ pub enum ImportError {
         #[source]
         source: toml::de::Error,
     },
+}
+
+pub const DEFAULT_EXPORT_FILE_NAME: &str = "pipelines.toml";
+
+/// `pipelines.toml` next to the database, the default of `[pipelines] export_path`.
+pub fn default_export_path(db_path: &Path) -> PathBuf {
+    match db_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(DEFAULT_EXPORT_FILE_NAME),
+        _ => PathBuf::from(DEFAULT_EXPORT_FILE_NAME),
+    }
 }
 
 /// Renders the definitions as the TOML document written to `pipelines.toml`.

@@ -48,3 +48,11 @@ CREATE TABLE observation_outbox (
     retain      INTEGER NOT NULL,
     created_at  INTEGER NOT NULL
 );
+
+-- pipeline_meta: the edge-node-id the node last started with, recorded at
+-- startup so that nodectl can enqueue publications with the same topic prefix
+-- while the node is stopped. The TOML stays the authority.
+CREATE TABLE pipeline_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);

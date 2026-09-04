@@ -4,6 +4,7 @@ mod cmd {
     pub mod devices;
     pub mod fingerprint;
     pub mod passphrase;
+    pub mod pipeline;
     pub mod query;
     pub mod recovery_activate;
     pub mod registry;
@@ -81,6 +82,10 @@ enum Command {
     Passphrase {
         #[command(subcommand)]
         command: cmd::passphrase::PassphraseCommand,
+    },
+    Pipeline {
+        #[command(subcommand)]
+        command: cmd::pipeline::PipelineCommand,
     },
     Time {
         #[command(subcommand)]
@@ -431,6 +436,7 @@ fn dispatch(
         Command::Identity | Command::MqttBinding => {
             unreachable!("read-only identity commands do not enter the write dispatcher")
         }
+        Command::Pipeline { command } => cmd::pipeline::run(conn, db_path, command),
         Command::Smoke { command } => match command {
             cmd::smoke::SmokeCommand::Enqueue => cmd::smoke::run_enqueue(conn),
             cmd::smoke::SmokeCommand::Status(_) => {

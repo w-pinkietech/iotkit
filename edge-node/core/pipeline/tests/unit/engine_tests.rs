@@ -351,6 +351,30 @@ fn reconcile_starts_series_only_where_state_is_missing_or_structurally_stale() {
 }
 
 #[test]
+fn reconcile_records_the_edge_node_id_for_tools_without_the_toml() {
+    let db = open();
+    with(&db, |conn| {
+        assert!(PipelineEngine::load(conn).unwrap().is_none());
+        engine().reconcile(conn, 0).unwrap();
+        let loaded = PipelineEngine::load(conn)
+            .unwrap()
+            .expect("recorded at startup");
+        assert_eq!(loaded.edge_node_id().as_str(), "rpi1");
+        PipelineEngine::new("rpi2".parse().unwrap())
+            .reconcile(conn, 1)
+            .unwrap();
+        assert_eq!(
+            PipelineEngine::load(conn)
+                .unwrap()
+                .unwrap()
+                .edge_node_id()
+                .as_str(),
+            "rpi2"
+        );
+    });
+}
+
+#[test]
 fn state_and_outbox_commit_or_roll_back_together() {
     let db = open();
     let definition = count_definition();

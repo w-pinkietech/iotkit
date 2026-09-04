@@ -13,7 +13,6 @@ use crate::input_adapters::PreparedInputAdapter;
 pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 pub const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 pub const MAX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60 * 60);
-pub const DEFAULT_PIPELINES_EXPORT_FILE: &str = "pipelines.toml";
 
 // ── Error ───────────────────────────────────────────────
 
@@ -213,6 +212,9 @@ pub struct ApiConfig {
     pub enabled: bool,
     pub bind: SocketAddr,
     pub edge_node_id: EdgeNodeId,
+    /// Where the API writes `pipelines.toml` after a committed pipeline
+    /// operation (`[pipelines] export_path`).
+    pub pipelines_export_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,10 +491,10 @@ pub fn resolve(raw: RawConfig, source: ConfigSource) -> Result<EdgeNodeConfig, C
         instances
     };
 
-    let api = resolve_api(raw.api, edge_node_id.clone())?;
     let mqtt_output = resolve_mqtt_output(raw.output)?;
     let status = resolve_status(raw.status)?;
     let pipelines = resolve_pipelines(raw.pipelines, &db_path)?;
+    let api = resolve_api(raw.api, edge_node_id.clone(), pipelines.export_path.clone())?;
 
     if adapter_instances.is_empty() && !api.enabled && mqtt_output.is_none() {
         return Err(ConfigError::Validation(
@@ -583,7 +585,7 @@ fn resolve_pipelines(
 }
 
 pub fn default_pipelines_export_path(db_path: &str) -> PathBuf {
-    sibling_of_db(db_path, DEFAULT_PIPELINES_EXPORT_FILE)
+    iotkit_core_pipeline::default_export_path(Path::new(db_path))
 }
 
 fn resolve_adapter_instances(
@@ -686,7 +688,11 @@ fn resolve_mqtt_output(raw: RawOutputConfig) -> Result<Option<MqttOutputConfig>,
     }))
 }
 
-fn resolve_api(raw: RawApiConfig, edge_node_id: EdgeNodeId) -> Result<ApiConfig, ConfigError> {
+fn resolve_api(
+    raw: RawApiConfig,
+    edge_node_id: EdgeNodeId,
+    pipelines_export_path: PathBuf,
+) -> Result<ApiConfig, ConfigError> {
     let enabled = raw.enabled.unwrap_or(true);
     let bind_raw = raw.bind.unwrap_or_else(|| "0.0.0.0:8443".to_string());
     let bind: SocketAddr = bind_raw.parse().map_err(|_| {
@@ -703,6 +709,7 @@ fn resolve_api(raw: RawApiConfig, edge_node_id: EdgeNodeId) -> Result<ApiConfig,
         enabled,
         bind,
         edge_node_id,
+        pipelines_export_path,
     })
 }
 

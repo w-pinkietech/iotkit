@@ -93,6 +93,7 @@ fn api_config(bind: SocketAddr) -> ApiConfig {
         enabled: true,
         bind,
         edge_node_id: "test-edge".parse().unwrap(),
+        pipelines_export_path: std::path::PathBuf::from("pipelines.toml"),
     }
 }
 

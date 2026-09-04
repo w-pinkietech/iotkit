@@ -26,6 +26,7 @@ fn api_config() -> ApiConfig {
         enabled: true,
         bind: "127.0.0.1:0".parse().unwrap(),
         edge_node_id: "read-test-edge".parse().unwrap(),
+        pipelines_export_path: std::path::PathBuf::from("pipelines.toml"),
     }
 }
 

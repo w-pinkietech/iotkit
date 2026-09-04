@@ -31,7 +31,10 @@ pub use engine::{
     AcceptedReading, DeliveryOutcome, EngineError, PipelineDelivery, PipelineEngine, SeriesStart,
 };
 pub use evaluator::{Evaluation, EvaluationState, EvaluatorError};
-pub use export::{ExportError, ImportError, export_definitions, read_definitions};
+pub use export::{
+    DEFAULT_EXPORT_FILE_NAME, ExportError, ImportError, default_export_path, export_definitions,
+    read_definitions,
+};
 pub use faults::{FaultRecord, PipelineFaults};
 pub use outbox::OutboxRow;
 pub use store::{PipelineState, StoreError};

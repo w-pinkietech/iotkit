@@ -3,6 +3,8 @@
 use iotkit_core_types::PipelineId;
 use rusqlite::{Connection, OptionalExtension, params};
 
+use iotkit_core_types::EdgeNodeId;
+
 use crate::definition::PipelineDefinition;
 use crate::evaluator::EvaluationState;
 use crate::wire::ObservationValue;
@@ -246,4 +248,32 @@ fn decode_value(json: &str) -> Option<ObservationValue> {
         serde_json::Value::Number(number) => number.as_f64().map(ObservationValue::Measurement),
         _ => None,
     }
+}
+
+const META_EDGE_NODE_ID: &str = "edge_node_id";
+
+pub fn put_edge_node_id(conn: &Connection, edge_node_id: &EdgeNodeId) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO pipeline_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![META_EDGE_NODE_ID, edge_node_id.as_str()],
+    )?;
+    Ok(())
+}
+
+pub fn get_edge_node_id(conn: &Connection) -> Result<Option<EdgeNodeId>, StoreError> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM pipeline_meta WHERE key = ?1",
+            [META_EDGE_NODE_ID],
+            |row| row.get(0),
+        )
+        .optional()?;
+    value
+        .map(|value| {
+            EdgeNodeId::parse(value.as_str()).map_err(|error| {
+                StoreError::CorruptDefinition(META_EDGE_NODE_ID.into(), error.to_string())
+            })
+        })
+        .transpose()
 }

@@ -81,6 +81,12 @@ impl PipelineEngine {
         &self.edge_node_id
     }
 
+    /// Engine bound to the edge-node-id the node recorded at its last startup,
+    /// for tools that run against the database without the TOML.
+    pub fn load(conn: &Connection) -> Result<Option<Self>, StoreError> {
+        Ok(store::get_edge_node_id(conn)?.map(Self::new))
+    }
+
     /// Inserts a definition and starts its first series.
     pub fn create(
         &self,
@@ -177,6 +183,7 @@ impl PipelineEngine {
     /// Startup reconciliation: a pipeline without state, or whose state was
     /// started under a different structural hash, starts a new series.
     pub fn reconcile(&self, conn: &Connection, now: i64) -> Result<Vec<SeriesStart>, EngineError> {
+        store::put_edge_node_id(conn, &self.edge_node_id)?;
         let mut started = Vec::new();
         for definition in store::list_definitions(conn)? {
             let continues = store::get_state(conn, &definition.id)?
