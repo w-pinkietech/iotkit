@@ -12,6 +12,7 @@ iotkit-core-timeseries = { path = "../timeseries" }
 iotkit-core-registry = { path = "../registry" }
 iotkit-core-publish = { path = "../publish" }
 iotkit-core-ops = { path = "../ops" }
+iotkit-core-pipeline = { path = "../pipeline" }
 rusqlite = { version = "0.32", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

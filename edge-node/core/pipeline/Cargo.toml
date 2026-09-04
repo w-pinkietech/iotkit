@@ -1,0 +1,21 @@
+[package]
+name = "iotkit-core-pipeline"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iotkit-core-types = { path = "../types" }
+iotkit-core-storage = { path = "../storage" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+toml = "0.8"
+uuid = { version = "1", features = ["v7"] }
+
+[dev-dependencies]
+iotkit-core-storage = { path = "../storage", features = ["test-util"] }
+tempfile = "3"

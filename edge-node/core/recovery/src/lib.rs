@@ -77,6 +77,7 @@ pub fn all_edge_node_migrations() -> Vec<Migration> {
     migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
     migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
     migrations.extend_from_slice(iotkit_core_ops::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_pipeline::MIGRATIONS);
     migrations.extend_from_slice(MIGRATIONS);
     migrations.sort_by_key(|migration| migration.version);
     debug_assert!(

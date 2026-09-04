@@ -1466,6 +1466,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iotkit-core-pipeline"
+version = "0.4.0"
+dependencies = [
+ "iotkit-core-storage",
+ "iotkit-core-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "iotkit-core-publish"
 version = "0.4.0"
 dependencies = [
@@ -1555,6 +1571,9 @@ dependencies = [
 [[package]]
 name = "iotkit-core-types"
 version = "0.4.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "iotkit-edge"
