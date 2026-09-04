@@ -49,7 +49,7 @@ const validatePayload = {
 
 const canonicalKeyOrder = {
   observation: ["series_id", "sequence", "uptime_ms", "unix_epoch_ms", "value"],
-  status: ["uptime_ms", "unix_epoch_ms", "value"],
+  status: ["uptime_ms", "unix_epoch_ms", "value", "faults"],
 };
 
 function canonical(channel, parsed) {

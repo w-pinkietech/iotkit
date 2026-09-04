@@ -1,0 +1,7 @@
+{
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "payload": "{\"uptime_ms\":8123456,\"unix_epoch_ms\":1784190000123,\"value\":\"online\"}",
+  "reason": "faults is always present on a heartbeat; no faults is an empty array, not an omitted key"
+}

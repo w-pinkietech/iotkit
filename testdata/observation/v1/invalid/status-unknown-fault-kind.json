@@ -1,0 +1,7 @@
+{
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "payload": "{\"uptime_ms\":8123456,\"unix_epoch_ms\":1784190000123,\"value\":\"online\",\"faults\":[{\"kind\":\"outbox-stalled\",\"since_uptime_ms\":1,\"since_unix_epoch_ms\":null}]}",
+  "reason": "fault kinds are a closed set in this revision"
+}

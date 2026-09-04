@@ -1,0 +1,10 @@
+{
+  "description": "heartbeat: connected and persisting, but one Input Adapter cannot open its hardware interface (the serial device node is missing). Observations from pipelines fed by that adapter stop; the fault disappears once the interface opens.",
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"uptime_ms\":8243456,\"unix_epoch_ms\":1784190120123,\"value\":\"online\",\"faults\":[{\"kind\":\"interface-open-failed\",\"since_uptime_ms\":8200000,\"since_unix_epoch_ms\":1784190076667,\"adapter\":\"bravepi_main\",\"reason\":\"not-found\",\"detail\":\"/dev/ttyAMA0\"}]}",
+  "consumer_note": "Treat pipelines fed by this adapter as unavailable input rather than as an idle machine. The value stays online: the device itself is alive and persisting."
+}

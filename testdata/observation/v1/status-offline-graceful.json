@@ -5,5 +5,5 @@
   "topic": "iotkit/v1/edge-node/rpi1/status",
   "qos": 1,
   "retain": true,
-  "payload": "{\"uptime_ms\":8243789,\"unix_epoch_ms\":1784190120456,\"value\":\"offline\"}"
+  "payload": "{\"uptime_ms\":8243789,\"unix_epoch_ms\":1784190120456,\"value\":\"offline\",\"faults\":[]}"
 }

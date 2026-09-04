@@ -5,7 +5,7 @@ description: "IoTKit端末がObservationとstatusを標準MQTT Brokerへ公開�
 language: ja
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 3
+revision: 4
 ---
 
 # IoTKit MQTT Output Adapter契約 v1
@@ -122,9 +122,10 @@ consumerは次のように使う。
 
 ### 公開の頻度
 
-- `measurement`は、校正後の値が同じseriesで最後に公開した値と異なるときにだけ公開する（変化時のみ）。seriesの最初の入力は常に公開する。値が変わらない間は公開せず、consumerはretainされた最新値とheartbeatで現在値と生存を判断する。最悪ケースの公開頻度は入力の頻度に等しい。
+- `measurement`は入力ごとに公開する。値が前回と同じでも公開する。公開頻度は入力の頻度に等しい。現行のInput Adapterはすべて周期的に入力を出すので、`measurement`のObservationの列はそのセンサーの生存信号でもある。consumerは`uptime_ms`の間隔が自分の閾値を超えたら入力の停止と判断できる。
 - `state`は、seriesの最初の入力と、二値化、ヒステリシス、デバウンスを経て状態が確定して変わったときに公開する。
 - `accumulated-count`は、seriesの開始時（`sequence = 1, value = 0`）と、累積値が増えたときに公開する。
+- `state`と`accumulated-count`は変化がなければ公開しないため、その列だけでは「機械が止まっている」と「入力が来ていない」を区別できない。区別したい入力には、同じ入力を参照する`measurement` pipelineを置く。
 
 ## 5. seriesの規則
 
@@ -157,11 +158,12 @@ payload：
 {
   "uptime_ms": 8123456,
   "unix_epoch_ms": 1784190000123,
-  "value": "online"
+  "value": "online",
+  "faults": []
 }
 ```
 
-`uptime_ms`と`unix_epoch_ms`の意味はObservationと同じ（4節）。heartbeatの`uptime_ms`は端末の連続稼働時間そのものである。
+`uptime_ms`と`unix_epoch_ms`の意味はObservationと同じ（4節）。heartbeatの`uptime_ms`は端末の連続稼働時間そのものである。`faults`は7.1節。
 
 `value`は次の3値。
 
@@ -173,8 +175,8 @@ payload：
 
 - heartbeatは定期的に公開する`online`または`degraded`である。接続確立の直後に即時公開し、以後は`heartbeat_interval`（既定60秒、5秒〜1時間）ごとにQoS 1、retain有効で公開する。
 - `online`と`degraded`の切り替わりはheartbeatの間隔を待たずに即時公開する。
-- 正常終了時、IoTKitは`uptime_ms`と（信頼できれば）`unix_epoch_ms`を持つ`offline`をQoS 1、retain有効で公開し、PUBACKを最大2秒待って切断する。
-- 異常切断時はMQTTのWill（QoS 1、retain有効）によりBrokerが次を公開する。Willは接続時に登録されるため、IoTKit自身は切断の時刻も経過時間も観測しておらず、両方が`null`になる。
+- 正常終了時、IoTKitは`uptime_ms`と（信頼できれば）`unix_epoch_ms`、その時点の`faults`を持つ`offline`をQoS 1、retain有効で公開し、PUBACKを最大2秒待って切断する。
+- 異常切断時はMQTTのWill（QoS 1、retain有効）によりBrokerが次を公開する。Willは接続時に登録されるため、IoTKit自身は切断の時刻も経過時間も観測しておらず、両方が`null`になる。`faults`は持たない。
 
 ```json
 {
@@ -183,6 +185,47 @@ payload：
   "value": "offline"
 }
 ```
+
+### 7.1 faults
+
+`faults`は、IoTKitが自分で判定できる端末の障害の一覧である。heartbeatと正常終了の`offline`に常に置き、障害がなければ空配列とする。Consoleが開かれていなくても、statusを購読するconsumerだけで端末の障害と欠測の可能性を識別できるようにするための項目である（#243）。
+
+- 障害は続いている間は要素として現れ、回復すると次のstatusから消える。consumerは前回の`faults`との差分で開始と回復を検出できる。
+- `faults`の変化は、`online`と`degraded`の切り替わりと同じくheartbeatの間隔を待たずに即時公開する。
+- MQTTに接続していない間に起きた障害は、再接続直後に公開するstatusに載る。
+- 各要素は次のkeyをこの順に持つ：`kind`、`since_uptime_ms`、`since_unix_epoch_ms`（4節の2つの時計。障害の開始時点）、kindごとの追加field、任意の`detail`（人向けの短い文。機械的な判定には使わない）。
+
+| kind | 意味 | 追加field | `value` | 回復 |
+|---|---|---|---|---|
+| `storage-write-failed` | 入力のSQLiteトランザクションが失敗し、新しい入力を破棄している | `count`：開始からの破棄件数 | `degraded`（常に対になる） | 保存が1回成功したとき |
+| `interface-open-failed` | Input Adapterがハードウェアのインタフェース（シリアル、I2C、GPIO）を開けない。そのadapterを入力にするpipelineのObservationは止まる | `adapter`：インスタンス名、`reason`：`not-found` / `permission-denied` / `busy` / `io-error` | `online`（端末自体は動いている） | 開けたとき |
+
+```json
+{
+  "uptime_ms": 8243456,
+  "unix_epoch_ms": 1784190120123,
+  "value": "online",
+  "faults": [
+    {
+      "kind": "interface-open-failed",
+      "since_uptime_ms": 8200000,
+      "since_unix_epoch_ms": 1784190076667,
+      "adapter": "bravepi_main",
+      "reason": "not-found",
+      "detail": "/dev/ttyAMA0"
+    }
+  ]
+}
+```
+
+kindはこの2つに閉じる。追加する場合は本契約のrevisionを上げる。consumerは未知のkindを拒否せず、`kind`と`since_*`だけを読んで「不明な障害」として扱ってよい。
+
+次はMQTTの障害モードに**しない**と決めた事象である。
+
+- `pipelines.toml`の書き出し失敗：Consoleまたは`nodectl`の操作の応答で返す。
+- 接続中にPUBACKが来ない、Brokerがpublishを拒否する：Broker側の異常で、consumerはheartbeatが届いているのにObservationが止まることで気づける。
+- 入力の停止：判定の閾値は業務側にある。`measurement`の列で判断する（4節）。
+- pipeline定義と入力の不一致、累積カウンタの上限到達：Consoleに表示する。
 
 ## 8. pipelineの削除
 
@@ -201,6 +244,7 @@ Brokerはそのtopicのretain値を消し、以後に購読するconsumerには�
 - `degraded`の区間を欠測として記録し、`offline`と区別する（7節）。
 - heartbeatの`unix_epoch_ms`が整数なら、受信時刻との差から端末の時計のずれを検出できる。`null`の間は検出できない。時刻差だけを理由にObservationを破棄しない。
 - kindはtopicの末尾で確定し、pipeline定義を参照せずにpayloadをdecodeする（3節）。
+- 生存を見たい入力には`measurement` pipelineを置き、その列の`uptime_ms`の間隔で入力の停止を判断する（4節）。`faults`の`interface-open-failed`は、その停止の理由が端末側で確定している場合に届く（7.1節）。
 
 ## 10. 契約の成果物
 
@@ -220,4 +264,4 @@ fixtureはproducerとconsumerの両方の正である。IoTKitのconformance tes
 
 ## 11. 未決定の事項
 
-現時点ではない。`measurement`の公開頻度（第4節）と削除通知のoutbox経由（第8節）は、#232 子Issue 3で決めた。
+現時点ではない。`measurement`の公開頻度は#232 子Issue 3で「変化時のみ」と決めたが、#246 で「入力ごと」に改めた（第4節）。削除通知のoutbox経由（第8節）は子Issue 3で決めた。`faults`（第7.1節）は#243 と#246 で決めた。

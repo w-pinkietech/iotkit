@@ -5,7 +5,7 @@ description: "Embedded SQLiteとPostgreSQL profileの再現可能な容量回帰
 language: ja
 translation_key: operations.storage-capacity
 status: stable
-revision: 6
+revision: 7
 ---
 
 # IoTKit Edge storage capacity regression smoke
@@ -59,8 +59,8 @@ SQLiteとPostgreSQLを同時に正本にしたり、TimescaleDBへrawを二重�
 [#232](https://github.com/w-pinkietech/iotkit/issues/232) の再設計後、端末のSQLiteで増え続けうるのは未送信のpublicationを持つoutboxだけである。時系列は端末に保存しない。
 
 - 1行は約200バイト（topic、payload、少数のメタデータ）。
-- `accumulated-count`と`state`は変化があったときだけ公開する。`measurement`は校正後の値が変わったときだけ公開し、最悪ケースは入力の頻度に等しい。
-- 例：1秒周期の入力で毎回値が変わる`measurement` pipeline 1本は、Broker停止中に1日で約86,400行、約17 MB増える。250 ms周期なら約70 MB/日。
+- `accumulated-count`と`state`は変化があったときだけ公開する。`measurement`は入力ごとに公開するので、その公開頻度は入力の頻度に等しい。
+- 例：1秒周期の入力を持つ`measurement` pipeline 1本は、Broker停止中に1日で約86,400行、約17 MB増える。250 ms周期なら約70 MB/日。Brokerが動いている間も、Pinkietなどの受信側には同じ件数が届く。
 - Brokerに接続していれば、PUBACKのたびに行が消えるため定常状態のoutboxは数行に留まる。
 
-初期版ではoutboxの容量上限と間引きを持たない。Broker停止が長引く現場では、ディスクの空き容量と`measurement` pipelineの入力周期を照らし、必要なら入力周期を下げる。
+初期版ではoutboxの容量上限と間引きを持たない。量を決めるのはセンサーの入力周期なので、Broker停止が長引く現場や受信側の保存量が問題になる現場では、ディスクの空き容量と`measurement` pipelineの入力周期を照らし、必要なら入力周期を下げる。

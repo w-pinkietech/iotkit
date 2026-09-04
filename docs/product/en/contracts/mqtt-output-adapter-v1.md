@@ -5,7 +5,7 @@ description: "Defines the topics, payloads, delivery, and consumer obligations w
 language: en
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 3
+revision: 4
 ---
 
 # IoTKit MQTT Output Adapter contract v1
@@ -122,9 +122,10 @@ NTP synchronization is recommended and verified at installation where it is avai
 
 ### Publish rate
 
-- `measurement` is published only when the calibrated value differs from the last value published in the same series (on change). The first input of a series is always published. While the value is unchanged nothing is published; consumers rely on the retained latest value and the heartbeat for the current value and liveness. The worst-case rate equals the input rate.
+- `measurement` is published on every input, even when the value equals the previous one. The publish rate equals the input rate. Every current Input Adapter produces input periodically, so the stream of `measurement` Observations doubles as the liveness signal of that sensor: a consumer treats a gap in `uptime_ms` beyond its own threshold as input having stopped.
 - `state` is published on the first input of a series and whenever the state settles to a different value after thresholding, hysteresis, and debounce.
 - `accumulated-count` is published at series start (`sequence = 1, value = 0`) and whenever the count increases.
+- Because `state` and `accumulated-count` publish nothing while unchanged, their streams alone cannot distinguish "the machine is idle" from "no input arrives". Where that distinction matters, add a `measurement` pipeline on the same input.
 
 ## 5. Series rules
 
@@ -157,11 +158,12 @@ Payload:
 {
   "uptime_ms": 8123456,
   "unix_epoch_ms": 1784190000123,
-  "value": "online"
+  "value": "online",
+  "faults": []
 }
 ```
 
-`uptime_ms` and `unix_epoch_ms` mean the same as in an Observation (section 4). The `uptime_ms` of a heartbeat is the device's continuous running time.
+`uptime_ms` and `unix_epoch_ms` mean the same as in an Observation (section 4). The `uptime_ms` of a heartbeat is the device's continuous running time. `faults` is described in section 7.1.
 
 `value` has three values.
 
@@ -173,8 +175,8 @@ Payload:
 
 - A heartbeat is the periodic `online` or `degraded`. IoTKit publishes it immediately after connecting and then every `heartbeat_interval` (default 60 s, 5 s to 1 h) with QoS 1 and retain.
 - A change between `online` and `degraded` is published immediately, without waiting for the interval.
-- At graceful shutdown IoTKit publishes `offline` with `uptime_ms` and, when trusted, `unix_epoch_ms`, QoS 1 and retain, waits up to 2 s for PUBACK, and disconnects.
-- On abnormal disconnect the Broker publishes IoTKit's Will (QoS 1, retain). The Will is registered at connect time, so IoTKit observed neither the time nor the uptime of the disconnect and both are `null`.
+- At graceful shutdown IoTKit publishes `offline` with `uptime_ms`, `unix_epoch_ms` when trusted, and the current `faults`, QoS 1 and retain, waits up to 2 s for PUBACK, and disconnects.
+- On abnormal disconnect the Broker publishes IoTKit's Will (QoS 1, retain). The Will is registered at connect time, so IoTKit observed neither the time nor the uptime of the disconnect and both are `null`. It carries no `faults`.
 
 ```json
 {
@@ -183,6 +185,47 @@ Payload:
   "value": "offline"
 }
 ```
+
+### 7.1 faults
+
+`faults` lists the device faults IoTKit can determine by itself. It is always present on heartbeats and on the graceful `offline`, and is an empty array when there is none. It exists so that a consumer subscribed to status can tell device faults and possible gaps apart even while no Console is open (#243).
+
+- A fault appears as an element while it lasts and disappears from the next status when it recovers. Consumers detect start and recovery by diffing against the previous `faults`.
+- A change in `faults` is published immediately, without waiting for the heartbeat interval, like a change between `online` and `degraded`.
+- A fault that started while MQTT was disconnected appears in the status published right after reconnection.
+- Each element has these keys in this order: `kind`, `since_uptime_ms`, `since_unix_epoch_ms` (the two clocks of section 4 at the moment the fault started), the kind-specific fields, and an optional `detail` (a short human-readable note, never used for machine decisions).
+
+| kind | Meaning | Extra fields | `value` | Recovers |
+|---|---|---|---|---|
+| `storage-write-failed` | The SQLite transaction for inputs fails and new inputs are discarded | `count`: inputs discarded since the fault started | `degraded` (always paired) | When one write succeeds |
+| `interface-open-failed` | An Input Adapter cannot open its hardware interface (serial, I2C, GPIO). Observations from pipelines fed by that adapter stop | `adapter`: instance name; `reason`: `not-found` / `permission-denied` / `busy` / `io-error` | `online` (the device itself is running) | When the interface opens |
+
+```json
+{
+  "uptime_ms": 8243456,
+  "unix_epoch_ms": 1784190120123,
+  "value": "online",
+  "faults": [
+    {
+      "kind": "interface-open-failed",
+      "since_uptime_ms": 8200000,
+      "since_unix_epoch_ms": 1784190076667,
+      "adapter": "bravepi_main",
+      "reason": "not-found",
+      "detail": "/dev/ttyAMA0"
+    }
+  ]
+}
+```
+
+The kinds are closed to these two; adding one bumps this contract's revision. Consumers do not reject an unknown kind; they may read only `kind` and `since_*` and treat it as an unknown fault.
+
+The following were considered and are deliberately **not** MQTT fault modes.
+
+- A failed `pipelines.toml` export: returned in the response of the Console or `nodectl` operation that caused it.
+- No PUBACK while connected, or the Broker rejecting a publish: a Broker-side problem; consumers notice Observations stopping while heartbeats keep arriving.
+- Input silence: the threshold belongs to the business side; judge it from the `measurement` stream (section 4).
+- A pipeline definition that does not match its input, or the count reaching its limit: shown in the Console.
 
 ## 8. Pipeline deletion
 
@@ -201,6 +244,7 @@ Consumers already subscribed receive the zero-length payload. It is not malforme
 - Record `degraded` intervals as gaps and distinguish them from `offline` (section 7).
 - When a heartbeat's `unix_epoch_ms` is an integer, its difference from the receipt time reveals device clock drift; while it is `null` drift cannot be measured. Do not discard Observations on time difference alone.
 - Settle the kind from the trailing topic segment and decode the payload without consulting pipeline definitions (section 3).
+- Put a `measurement` pipeline on every input whose liveness matters and judge input silence from the `uptime_ms` gaps of its stream (section 4). The `interface-open-failed` fault arrives when the device itself has settled the reason for that silence (section 7.1).
 
 ## 10. Contract artifacts
 
@@ -220,4 +264,4 @@ A disagreement between document, schema, fixtures, or checks is a contract defec
 
 ## 11. Open items
 
-None at present. The `measurement` publish rate (section 4) and the outbox path of the deletion notice (section 8) were decided in #232 child issue 3.
+None at present. The `measurement` publish rate was decided as "on change" in #232 child issue 3 and changed to "every input" in #246 (section 4). The outbox path of the deletion notice (section 8) was decided in child issue 3. `faults` (section 7.1) was decided in #243 and #246.
