@@ -70,10 +70,16 @@ function parseFrontmatter(file, content, layer = "okf-min") {
   return result;
 }
 
+// Fenced blocks and inline code are not links, even when they contain `](`
+// (regular expressions such as `[a-z0-9](?:...)` do).
+function withoutCode(content) {
+  return content.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+}
+
 function linksFrom(content) {
   const links = [];
   const regex = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
-  for (const match of content.matchAll(regex)) links.push(match[1]);
+  for (const match of withoutCode(content).matchAll(regex)) links.push(match[1]);
   return links;
 }
 
