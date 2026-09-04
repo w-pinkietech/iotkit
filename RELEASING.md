@@ -50,14 +50,14 @@ version="$(node --input-type=module -e \
 tag="v${version}"
 node scripts/check-release-version.mjs --tag "$tag"
 scripts/verify.sh --workspace
-scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
+scripts/test-journey.sh
 git status --short --branch
 ```
 
 The checker refuses a tag that does not exactly equal `v` plus the workspace
-version. The worktree must be clean before continuing. The host gate owns the
-release integration suites of the current product; field/manual recovery,
-fencing, and hardware evidence remain outside the release default.
+version. The worktree must be clean before continuing. The journey is the
+release integration suite; real-device evidence (journey stage L4) remains
+outside the release default.
 
 ## Publish from the merged commit
 

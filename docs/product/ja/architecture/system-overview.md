@@ -5,10 +5,12 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 22
+revision: 23
 ---
 
 # Architecture
+
+> **移行中の注記（#232 子Issue 5）。** 中央の`iotkit-edge`（`edge/`）、そのcustody契約、旧Output Adapter契約は#251 で削除した。以下の本文のうちIoTKit Edge、custody、application向けOutput Adapterに関する説明は削除済みの構成を指しており、Edge Nodeだけで完結する新しい配置への全面改訂は#250 の最終PRで行う。現在の送信経路は[MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)と「送信と保存」節の再設計の段落を正とする。
 
 IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、別processのRust製`iotkit-edge`、標準MQTT Brokerで構成します。Edge Nodeは単一SQLite DBを使い、Raspberry Pi上でsystemdにより無人運転します。IoTKit Edgeは導入時に`embedded`（SQLite）または`postgres`（PostgreSQL）の正本profileを一つ選びます。
 
@@ -22,8 +24,7 @@ IoTKitは、Rust製`iotkit-edge-node`とoperator CLIの`iotkit-edge-nodectl`、�
 | 自作device開発者 | Ingest wire contract | Rustを読まず、少数commandと安定reason codeで接続できる |
 | Adapter開発者 | host API、testkit、driver、既存Adapter | Storageやledgerを知らず、新しいsensor familyを追加できる |
 | Core contributor | `edge-node/core/*`、binary、test | Crate責務と依存方向が機械検査される |
-| Custody実装者 | Edge Node custody contract | Record family、ack、cursorがversion管理される |
-| Application integrator | Output Adapter contract | Raw custodyへ依存せず、application向けtopic/payloadを受け取れる |
+| Application integrator | MQTT Output Adapter契約 v1 | 標準MQTT BrokerからObservationとstatusを受け取り、自分のドメインへ対応付けられる |
 
 ## 実行配置
 
@@ -148,16 +149,6 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/tools/bravepi-poc` (`bravepi-poc`) | BravePI実機PoC用tool。非配布 |
 | `edge-node/apps/node` (`iotkit-edge-node`) | Edge Node composition root binary |
 | `edge-node/apps/nodectl` (`iotkit-edge-nodectl`) | Edge Node operator CLI |
-| `edge/` (`iotkit-edge`) | MQTT custody、storage、semantic、Output Adapter、認証付きConsole、backup、diagnostics、operator CLIのRust composition root |
-| `edge/custody-contract` (`iotkit-edge-custody-contract`) | Edge Node MQTTのdescriptor、activation、record batch、custody ackを厳格検証するversioned wire contractのleaf Rust表現 |
-| `edge/output-adapters/api` (`iotkit-output-adapter-api`) | ObservationからMQTTへの決定的変換とprovider非依存profile policyのleaf Rust API |
-| `edge/output-adapters/testkit` (`iotkit-output-adapter-testkit`) | Descriptor、config、publication、決定性のdev-only共通conformance assertion |
-| `edge/output-adapters/example` (`iotkit-output-adapter-example`) | Production registryへ登録しないvendor-neutralなcompile-tested作者例 |
-| `edge/output-adapters/generic-mqtt-json-v1` | 組み込みIoTKit汎用Observation JSON変換 |
-| `edge/output-adapters/pinikiet-mqtt-v1` | 組み込みPinikiet MQTT変換とprofile policy |
-| `edge/frontend/src/` | SSR ConsoleのTypeScript browser behavior |
-| `edge/openapi/edge-console-v1.yaml` | TypeScript生成元のbrowser JSON contract |
-| `testdata/egress/v1/`, `v2/` | Rust conformance testがdecodeするwire fixture |
 
 ## 機械検査するlayer rule
 
@@ -222,5 +213,4 @@ Edge Node process全体で`Arc<Mutex<Connection>>`を一つ使い、全subsystem
 ## 次に読む文書
 
 - [日本語ドキュメント](../index.md)
-- [Edge Node保管責任契約](../contracts/edge-node-custody-v1.md)
-- [Output Adapter契約](../contracts/output-adapter-v1.md)
+- [MQTT Output Adapter契約 v1](../contracts/mqtt-output-adapter-v1.md)

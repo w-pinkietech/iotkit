@@ -80,10 +80,9 @@ fixture check (`scripts/test-observation-consumer.sh`), then
 
 ## Old integration scripts
 
-`scripts/test-edge-*.sh`, `scripts/test-rust-edge-*.sh`,
-`scripts/test-mqtt-security.sh`, `scripts/test-broker-cert*.sh`,
-`scripts/test-certificate-hostname.sh`, and `scripts/test-iotkit-trial.sh`
-verify the current product. CI no longer runs them. They are deleted together
-with the documents that reference them in #232 child issue 5.
+The integration scripts of the central `iotkit-edge` were deleted with it in
+#251 (#232 child issue 5). `scripts/test-edge-node-fence.sh` and
+`scripts/test-edge-node-recovery-acl.sh` remain until the recovery crate is
+deleted in the same child issue; CI does not run them.
 
 Return to [`AGENTS.md`](../AGENTS.md).

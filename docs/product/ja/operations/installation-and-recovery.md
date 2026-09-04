@@ -5,10 +5,12 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 28
+revision: 29
 ---
 
 # IoTKit Edgeの導入と復旧
+
+> **移行中の注記（#232 子Issue 5）。** 本書が説明する中央の`iotkit-edge`、`scripts/bootstrap-edge.sh`、`deploy/compose.edge*.yaml`は#251 で削除した。再設計後の端末（`iotkit-edge-node` + 標準MQTT Broker）の導入手順と、「TOML、SQLiteファイル、`pipelines.toml`の3点をコピーする」復旧手順への書き直しは#250 の中で行う。それまでは[試用profile](trial-profile.md)が唯一の実行可能な導入手順である。
 
 一つのIoTKit Edge deploymentに対するoperatorの入口です。Router、DNS、IP払出し、firewall、VPNの設定はIoTKitの範囲外です。
 
