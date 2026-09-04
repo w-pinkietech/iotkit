@@ -2,6 +2,6 @@
   "channel": "status",
   "status_form": "heartbeat",
   "topic": "iotkit/v1/edge-node/rpi1/status",
-  "payload": "{\"uptime_ms\":null,\"unix_epoch_ms\":null,\"value\":\"online\"}",
+  "payload": "{\"uptime_ms\":null,\"unix_epoch_ms\":null,\"value\":\"online\",\"faults\":[]}",
   "reason": "only the Will offline has a null uptime_ms; a heartbeat always knows its uptime"
 }

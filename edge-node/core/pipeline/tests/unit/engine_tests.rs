@@ -167,7 +167,7 @@ fn accumulated_count_increments_publish_in_sequence_within_one_series() {
 }
 
 #[test]
-fn measurement_publishes_only_when_the_calibrated_value_changes() {
+fn measurement_publishes_every_input_even_when_unchanged() {
     let db = open();
     with(&db, |conn| {
         let engine = engine();
@@ -191,10 +191,17 @@ fn measurement_publishes_only_when_the_calibrated_value_changes() {
                 DeliveryOutcome::Silent => None,
             })
             .collect();
-        assert_eq!(sequences, vec![(1, 24.0), (2, 24.5), (3, 24.0)]);
+        assert_eq!(
+            sequences,
+            vec![(1, 24.0), (2, 24.0), (3, 24.5), (4, 24.5), (5, 24.0)],
+            "an unchanged value is still published; the stream is the liveness signal"
+        );
         let rows = outbox::all(conn).unwrap();
         assert_eq!(payload_json(&rows[0])["value"], 24);
-        assert_eq!(payload_json(&rows[1])["value"], 24.5);
+        assert_eq!(payload_json(&rows[2])["value"], 24.5);
+        let state = store::get_state(conn, &definition.id).unwrap().unwrap();
+        assert_eq!(state.last_value, Some(ObservationValue::Measurement(24.0)));
+        assert_eq!(state.next_sequence, 6);
     });
 }
 

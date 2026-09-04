@@ -1,10 +1,10 @@
 {
-  "description": "heartbeat: connected to MQTT and still sending the persisted outbox, but new input cannot be persisted and is being discarded. Increments of accumulated-count during this interval are lost.",
+  "description": "heartbeat: connected to MQTT and still sending the persisted outbox, but new input cannot be persisted and is being discarded. Increments of accumulated-count during this interval are lost. degraded always carries a storage-write-failed fault with the number of discarded inputs.",
   "channel": "status",
   "status_form": "heartbeat",
   "topic": "iotkit/v1/edge-node/rpi1/status",
   "qos": 1,
   "retain": true,
-  "payload": "{\"uptime_ms\":8183456,\"unix_epoch_ms\":1784190060123,\"value\":\"degraded\"}",
+  "payload": "{\"uptime_ms\":8183456,\"unix_epoch_ms\":1784190060123,\"value\":\"degraded\",\"faults\":[{\"kind\":\"storage-write-failed\",\"since_uptime_ms\":8150000,\"since_unix_epoch_ms\":1784190026667,\"count\":37,\"detail\":\"database or disk is full\"}]}",
   "consumer_note": "Record the interval as an unrecoverable gap. Distinguish it from offline, where the outbox preserves counts for later delivery."
 }

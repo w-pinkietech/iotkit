@@ -268,14 +268,9 @@ impl PipelineEngine {
             None
         } else {
             match definition.kind {
-                PipelineKind::Measurement => {
-                    let number = evaluation.number.expect("measurement emits a number");
-                    let unchanged = matches!(
-                        state.last_value,
-                        Some(ObservationValue::Measurement(last)) if last == number
-                    );
-                    (!unchanged).then_some(ObservationValue::Measurement(number))
-                }
+                // Every input is published, even an unchanged value: the stream
+                // of measurements is the sensor's liveness signal (contract §4).
+                PipelineKind::Measurement => evaluation.number.map(ObservationValue::Measurement),
                 PipelineKind::State => evaluation.boolean.map(ObservationValue::State),
                 PipelineKind::AccumulatedCount => {
                     evaluation.integer.map(ObservationValue::AccumulatedCount)

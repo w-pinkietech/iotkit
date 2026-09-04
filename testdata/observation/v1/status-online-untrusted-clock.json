@@ -5,6 +5,6 @@
   "topic": "iotkit/v1/edge-node/rpi1/status",
   "qos": 1,
   "retain": true,
-  "payload": "{\"uptime_ms\":45000,\"unix_epoch_ms\":null,\"value\":\"online\"}",
+  "payload": "{\"uptime_ms\":45000,\"unix_epoch_ms\":null,\"value\":\"online\",\"faults\":[]}",
   "consumer_note": "Clock drift cannot be measured from this heartbeat. Liveness is unaffected."
 }

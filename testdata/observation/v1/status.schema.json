@@ -2,18 +2,130 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/w-pinkietech/iotkit/testdata/observation/v1/status.schema.json",
   "title": "IoTKit MQTT Output Adapter v1 status payload",
-  "description": "Payload published to iotkit/v1/edge-node/{edge-node-id}/status with QoS 1 and retain. Heartbeats carry online or degraded. offline comes either from IoTKit at graceful shutdown (with uptime_ms and, when trusted, unix_epoch_ms) or from the Broker's Will (both null).",
+  "description": "Payload published to iotkit/v1/edge-node/{edge-node-id}/status with QoS 1 and retain. Heartbeats carry online or degraded plus the faults IoTKit has detected. offline comes either from IoTKit at graceful shutdown (with uptime_ms, unix_epoch_ms when trusted, and faults) or from the Broker's Will (uptime_ms and unix_epoch_ms null, no faults).",
   "$defs": {
     "topic": {
       "type": "string",
       "pattern": "^iotkit/v1/edge-node/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?/status$"
+    },
+    "fault": {
+      "description": "One fault IoTKit has detected. A fault is present while it lasts and disappears from the next status when it recovers. since_* are the two clocks at the moment the fault started.",
+      "type": "object",
+      "required": [
+        "kind",
+        "since_uptime_ms",
+        "since_unix_epoch_ms"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "storage-write-failed",
+            "interface-open-failed"
+          ]
+        },
+        "since_uptime_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "since_unix_epoch_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "storage-write-failed: inputs discarded since the fault started."
+        },
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "description": "interface-open-failed: the Input Adapter instance name from the device configuration."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "not-found",
+            "permission-denied",
+            "busy",
+            "io-error"
+          ],
+          "description": "interface-open-failed: why open() failed."
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Human-readable note. Never used for machine decisions."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "storage-write-failed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "count"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "adapter"
+                  ]
+                },
+                {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "interface-open-failed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "adapter",
+              "reason"
+            ],
+            "not": {
+              "required": [
+                "count"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "faults": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fault"
+      }
     },
     "heartbeat": {
       "type": "object",
       "required": [
         "uptime_ms",
         "unix_epoch_ms",
-        "value"
+        "value",
+        "faults"
       ],
       "additionalProperties": false,
       "properties": {
@@ -37,15 +149,20 @@
             "online",
             "degraded"
           ]
+        },
+        "faults": {
+          "$ref": "#/$defs/faults"
         }
-      }
+      },
+      "description": "online or degraded with the current faults. degraded is accompanied by a storage-write-failed fault."
     },
     "offline-graceful": {
       "type": "object",
       "required": [
         "uptime_ms",
         "unix_epoch_ms",
-        "value"
+        "value",
+        "faults"
       ],
       "additionalProperties": false,
       "properties": {
@@ -65,11 +182,14 @@
         },
         "value": {
           "const": "offline"
+        },
+        "faults": {
+          "$ref": "#/$defs/faults"
         }
       }
     },
     "offline-will": {
-      "description": "Published by the Broker on abnormal disconnect. Both times are null because IoTKit did not observe the disconnect.",
+      "description": "Published by the Broker on abnormal disconnect. Both times are null and there is no faults key because IoTKit did not observe the disconnect.",
       "type": "object",
       "required": [
         "uptime_ms",
