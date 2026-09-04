@@ -25,8 +25,12 @@ cargo clippy -p <crate-name> --all-targets -- -D warnings
 # Full-workspace diagnosis (fmt, layers, layout, tests, clippy)
 scripts/verify.sh --workspace
 
-# Journey (一気通貫テスト): added by #232 child issue 4; required in CI from then on
-# L1 minimal loop and L2 fault injection run from one script.
+# MQTT Output Adapter v1 contract: schema + canonical bytes, then the receiving
+# half of the journey (fixtures -> Mosquitto -> subscriber). Needs mosquitto
+# with mosquitto_pub/mosquitto_sub, or docker.
+node scripts/check-observation-fixtures.mjs
+scripts/test-observation-consumer.sh
+# L1 minimal loop and L2 fault injection join this script in #232 child issue 4.
 
 # Current product only, until #232 child issue 5 deletes them with their documents
 scripts/test-edge-console-frontend.sh
@@ -34,7 +38,7 @@ scripts/test-edge-console-e2e.sh
 scripts/test-edge-host-release-gate.sh NEW_REPORT_DIRECTORY
 ```
 
-CI runs the lightweight lane and the full Rust lane on every PR; there is no
+CI runs the lightweight, full Rust, and journey lanes on every PR; there is no
 changed-path selection, and a local pass does not replace CI. Raspberry Pi and
 physical sensors are required only when the task explicitly requires hardware
 evidence (journey stage L4).

@@ -48,8 +48,11 @@ documentation checks. The gates change per child issue:
 | #232 child 4 (MQTT Output Adapter) | plus: L1 and L2 journey. Never removed after this point |
 | #232 children 5 and 6 | same; `cargo test` shrinks as old crates are deleted |
 
-CI has no changed-path selection. Every PR runs the lightweight lane and the
-full Rust lane.
+CI has no changed-path selection. Every PR runs the lightweight lane, the full
+Rust lane, and the journey lane. Today the journey lane is the receiving half
+(`scripts/test-observation-consumer.sh`): the contract fixtures are published to
+a real Mosquitto and checked at the subscriber. Child issue 4 replaces the
+publisher with the IoTKit process.
 
 ## Old integration scripts
 
