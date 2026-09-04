@@ -262,11 +262,12 @@ require Node.js.
 CI runs three lanes on every PR, lightweight repository checks, the full Rust
 workspace (fmt, clippy, tests), and the journey lane, and publishes the stable
 `required CI` aggregate (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
-The journey lane currently publishes the MQTT Output Adapter v1 fixtures to a
-real Mosquitto and verifies them at the subscriber; it grows into the
-end-to-end test from a sample Input Adapter through the Broker to an independent
-consumer once the redesign in
-[#232](https://github.com/w-pinkietech/iotkit/issues/232) can publish. The
+The journey lane (`scripts/test-journey.sh`) runs the redesigned product end to
+end: the `trial-sample` Input Adapter through `iotkit-edge-node` and a real
+Mosquitto to an independent consumer, first the minimal loop and then fault
+injection (Broker outage, `kill -9`, tuning change, deletion, storage failure,
+graceful shutdown). It is the acceptance evidence of the redesign in
+[#232](https://github.com/w-pinkietech/iotkit/issues/232). The
 test policy is in [`.agents/testing.md`](.agents/testing.md). Run
 `scripts/verify.sh --workspace` locally for an explicit diagnosis, and
 `test-edge-host-release-gate.sh` once before a release of the current product.

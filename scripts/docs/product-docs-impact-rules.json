@@ -130,6 +130,21 @@
       "rationale": "Pipeline definitions, evaluator semantics, series rules, publish rate, or outbox growth changed; the product model, the MQTT Output Adapter contract, and the capacity note may need the same change."
     },
     {
+      "id": "mqtt-output-adapter",
+      "path_prefixes": [
+        "edge-node/apps/node/src/output_mqtt.rs",
+        "edge-node/apps/node/src/trusted_clock.rs",
+        "edge-node/input/host-api/src/lib.rs",
+        "scripts/test-journey.sh",
+        "scripts/journey/"
+      ],
+      "doc_paths": [
+        "contracts/mqtt-output-adapter-v1.md",
+        "concepts/product-model.md"
+      ],
+      "rationale": "Outbox delivery, status heartbeat, faults, Will, graceful offline, clock trust, or the end-to-end journey changed; the delivery and status sections of the contract and the Input Adapter failure behavior in the product model may need the same change."
+    },
+    {
       "id": "edge-node-toml-config",
       "path_prefixes": [
         "edge-node/apps/node/src/config.rs",

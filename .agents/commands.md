@@ -25,12 +25,16 @@ cargo clippy -p <crate-name> --all-targets -- -D warnings
 # Full-workspace diagnosis (fmt, layers, layout, tests, clippy)
 scripts/verify.sh --workspace
 
-# MQTT Output Adapter v1 contract: schema + canonical bytes, then the receiving
-# half of the journey (fixtures -> Mosquitto -> subscriber). Needs mosquitto
-# with mosquitto_pub/mosquitto_sub, or docker.
+# MQTT Output Adapter v1 contract: schema + canonical bytes, then the consumer
+# side alone (fixtures -> Mosquitto -> subscriber). Needs mosquitto with
+# mosquitto_pub/mosquitto_sub, or docker.
 node scripts/check-observation-fixtures.mjs
 scripts/test-observation-consumer.sh
-# L1 minimal loop and L2 fault injection join this script in #232 child issue 4.
+# The journey (L1 minimal loop + L2 fault injection): builds iotkit-edge-node
+# and nodectl, runs them against a throwaway Mosquitto, checks at an independent
+# consumer. Needs mosquitto + mosquitto_pub/mosquitto_sub and python3. About
+# 20 s after the build. IOTKIT_JOURNEY_BIN_DIR=<dir> skips the cargo build.
+scripts/test-journey.sh
 
 # Current product only, until #232 child issue 5 deletes them with their documents
 scripts/test-edge-console-frontend.sh

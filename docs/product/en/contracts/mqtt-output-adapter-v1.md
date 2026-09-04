@@ -5,12 +5,12 @@ description: "Defines the topics, payloads, delivery, and consumer obligations w
 language: en
 translation_key: contracts.mqtt-output-adapter-v1
 status: draft
-revision: 4
+revision: 5
 ---
 
 # IoTKit MQTT Output Adapter contract v1
 
-Status: contract fixed. Publishing from the IoTKit process is implemented in the child issues of [#232](https://github.com/w-pinkietech/iotkit/issues/232).
+Status: the IoTKit process (`[output.mqtt]` of `iotkit-edge-node`) publishes under this contract ([#232](https://github.com/w-pinkietech/iotkit/issues/232) child issue 4, #248).
 
 ## 1. Purpose
 
@@ -197,7 +197,7 @@ Payload:
 
 | kind | Meaning | Extra fields | `value` | Recovers |
 |---|---|---|---|---|
-| `storage-write-failed` | The SQLite transaction for inputs fails and new inputs are discarded | `count`: inputs discarded since the fault started | `degraded` (always paired) | When one write succeeds |
+| `storage-write-failed` | The SQLite transaction for inputs fails and new inputs are discarded | `count`: input write transactions that failed since the fault started; a sender's retransmission of the same input that fails again is counted too | `degraded` (always paired) | When one write succeeds |
 | `interface-open-failed` | An Input Adapter cannot open its hardware interface (serial, I2C, GPIO). Observations from pipelines fed by that adapter stop | `adapter`: instance name; `reason`: `not-found` / `permission-denied` / `busy` / `io-error` | `online` (the device itself is running) | When the interface opens |
 
 ```json
@@ -257,7 +257,8 @@ Consumers already subscribed receive the zero-length payload. It is not malforme
 | Cases that must be rejected | `testdata/observation/v1/invalid/*.json` |
 | Schema and canonical-form check | `node scripts/check-observation-fixtures.mjs` |
 | Consumer-side check (publish to a Broker, verify at the subscriber) | `scripts/test-observation-consumer.sh` |
-| Producer check (the topics and bytes IoTKit generates compared with the fixtures) | `edge-node/core/pipeline/tests/unit/wire_tests.rs` (`cargo test -p iotkit-core-pipeline`) |
+| Producer check (the topics and bytes IoTKit generates compared with the fixtures) | `edge-node/core/pipeline/tests/unit/wire_tests.rs` (Observation) and `status_tests.rs` (status) (`cargo test -p iotkit-core-pipeline`) |
+| End-to-end journey (the IoTKit process → Broker → independent consumer; L1 minimal loop and L2 fault injection) | `scripts/test-journey.sh`, `scripts/journey/check_messages.py` |
 
 The fixtures are the reference for both producer and consumer. IoTKit's conformance test compares the topics and bytes it publishes with them; consumer conformance tests and simulators generate payloads from them.
 A disagreement between document, schema, fixtures, or checks is a contract defect; none is silently adjusted to another.
