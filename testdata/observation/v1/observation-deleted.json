@@ -1,0 +1,10 @@
+{
+  "description": "pipeline deletion: a zero-length payload with retain clears the Broker's retained value for the topic.",
+  "channel": "observation",
+  "kind": "accumulated-count",
+  "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-cycle-count/accumulated-count",
+  "qos": 1,
+  "retain": true,
+  "payload": "",
+  "consumer_note": "Not malformed JSON. Record that this input is no longer available and stop treating it as live."
+}

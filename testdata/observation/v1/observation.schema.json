@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/w-pinkietech/iotkit/testdata/observation/v1/observation.schema.json",
+  "title": "IoTKit MQTT Output Adapter v1 Observation payload",
+  "description": "Payload published to iotkit/v1/edge-node/{edge-node-id}/observation/{pipeline-id}/{kind-key}. The kind is carried by the topic, so validate against $defs/<kind-key>. A zero-length payload on the same topic is a pipeline deletion and is not JSON.",
+  "$defs": {
+    "identifier": {
+      "description": "edge-node-id and pipeline-id: lowercase ASCII letters, digits, and hyphens; no leading or trailing hyphen; 1 to 64 bytes.",
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+    },
+    "kind-key": {
+      "type": "string",
+      "enum": [
+        "measurement",
+        "accumulated-count",
+        "state"
+      ]
+    },
+    "topic": {
+      "type": "string",
+      "pattern": "^iotkit/v1/edge-node/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?/observation/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?/(measurement|accumulated-count|state)$"
+    },
+    "series_id": {
+      "description": "Opaque string compared only for equality. Consumers must not validate it as a UUID or check a version.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "sequence": {
+      "description": "Starts at 1 for every series and increases by 1 per publication. Retransmissions reuse the same value.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "timestamp": {
+      "description": "Unix epoch milliseconds when IoTKit received the input that settled this output. Not monotonic; consumers order by sequence.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "common": {
+      "type": "object",
+      "required": [
+        "series_id",
+        "sequence",
+        "timestamp",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "series_id": {
+          "$ref": "#/$defs/series_id"
+        },
+        "sequence": {
+          "$ref": "#/$defs/sequence"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "value": {}
+      }
+    },
+    "measurement": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number"
+            }
+          }
+        }
+      ]
+    },
+    "accumulated-count": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    },
+    "state": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/measurement"
+    },
+    {
+      "$ref": "#/$defs/accumulated-count"
+    },
+    {
+      "$ref": "#/$defs/state"
+    }
+  ]
+}

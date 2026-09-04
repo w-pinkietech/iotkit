@@ -1,0 +1,10 @@
+{
+  "description": "heartbeat: connected to MQTT and still sending the persisted outbox, but new input cannot be persisted and is being discarded. Increments of accumulated-count during this interval are lost.",
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"timestamp\":1784190060123,\"value\":\"degraded\"}",
+  "consumer_note": "Record the interval as an unrecoverable gap. Distinguish it from offline, where the outbox preserves counts for later delivery."
+}

@@ -1,0 +1,10 @@
+{
+  "description": "accumulated-count: a monotonically increasing count within one series.",
+  "channel": "observation",
+  "kind": "accumulated-count",
+  "topic": "iotkit/v1/edge-node/rpi1/observation/press-01-cycle-count/accumulated-count",
+  "qos": 1,
+  "retain": true,
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":42,\"timestamp\":1784190000123,\"value\":1250}",
+  "consumer_note": "Apply only the delta from the last accepted value of the same series. Treat a decrease within a series as an anomaly."
+}

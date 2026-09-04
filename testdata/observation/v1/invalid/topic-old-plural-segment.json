@@ -1,0 +1,7 @@
+{
+  "channel": "observation",
+  "kind": "state",
+  "topic": "iotkit/v1/edge-nodes/rpi1/observation/press-01-temperature-high/state",
+  "payload": "{\"series_id\":\"018f5f83-7a2b-7c61-a729-6af238f558e0\",\"sequence\":1,\"timestamp\":1,\"value\":true}",
+  "reason": "the old iotkit/v1/edge-nodes/... grammar is gone"
+}

@@ -1,0 +1,7 @@
+{
+  "channel": "status",
+  "status_form": "heartbeat",
+  "topic": "iotkit/v1/edge-node/rpi1/status",
+  "payload": "{\"timestamp\":null,\"value\":\"online\"}",
+  "reason": "only the Will offline has a null timestamp"
+}

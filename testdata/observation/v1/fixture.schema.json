@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/w-pinkietech/iotkit/testdata/observation/v1/fixture.schema.json",
+  "title": "IoTKit MQTT Output Adapter v1 publication fixture",
+  "description": "One MQTT publication as IoTKit emits it. payload is the exact byte string; an empty string is a zero-length payload. Producer conformance compares topic, qos, retain, and payload bytes. Consumer conformance parses payload as JSON and must not depend on key order or whitespace.",
+  "type": "object",
+  "required": ["description", "channel", "topic", "qos", "retain", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "description": { "type": "string", "minLength": 1 },
+    "channel": { "type": "string", "enum": ["observation", "status"] },
+    "kind": {
+      "description": "Required for observation fixtures; the kind-key segment of the topic.",
+      "type": "string",
+      "enum": ["measurement", "accumulated-count", "state"]
+    },
+    "status_form": {
+      "description": "Required for status fixtures; selects the status.schema.json definition.",
+      "type": "string",
+      "enum": ["heartbeat", "offline-graceful", "offline-will"]
+    },
+    "topic": { "type": "string", "minLength": 1 },
+    "qos": { "const": 1 },
+    "retain": { "const": true },
+    "payload": { "type": "string" },
+    "consumer_note": {
+      "description": "What a consumer must do with this publication.",
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "channel": { "const": "observation" } } },
+      "then": { "required": ["kind"] }
+    },
+    {
+      "if": { "properties": { "channel": { "const": "status" } } },
+      "then": { "required": ["status_form"] }
+    }
+  ]
+}
