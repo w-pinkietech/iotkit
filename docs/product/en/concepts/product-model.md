@@ -107,11 +107,12 @@ The kinds are fixed to three. Business meaning such as production, alarm, or Gan
 | accumulated-count | A cumulative integer ≥ 0 computed by the pipeline | Treated as a count |
 | state | A boolean current state | None |
 
-Continuity and order are expressed by three fields.
+Continuity, order, and time are expressed by four fields.
 
 - **series**: one continuous generation of the same pipeline output. It does not change on display-name or threshold tuning, Broker configuration, process restart, or reconnect. It changes on structural edits (kind, input, trigger, unit), an explicit reset, importing definitions, or loss of state. A new accumulated-count series starts at `value = 0` and publishes that first value immediately.
 - **sequence**: an integer starting at 1 within a series and increasing by 1 per publication. Ordering and de-duplication use it.
-- **timestamp**: the real time at which the device received the input that settled the output. It can move backwards after a clock correction, so it is not used for ordering.
+- **uptime**: the time elapsed from the boot of the device to the receipt of the input that settled the output. It comes from a monotonic clock, so within one boot the difference between two Observations equals the real elapsed time. It resets on reboot without changing the series. Cycle times and gap lengths are measured with it.
+- **unix epoch time**: the wall-clock time at which that input was received. Present only while the device can vouch for its clock (for example after NTP synchronization); otherwise unknown. It stays unknown right after boot on devices without an RTC and on sites without NTP. Used for calendar placement, never for ordering.
 
 Observations are not stored long-term on the device. The device keeps only evaluation state, the current accumulated value or state, the series, the next sequence, and unsent publications; history belongs to the receiving application.
 

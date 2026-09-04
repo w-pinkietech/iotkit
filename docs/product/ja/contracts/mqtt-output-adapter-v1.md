@@ -24,7 +24,7 @@ sensor -> Input Adapter -> pipeline -> MQTT Output Adapter v1 -> MQTT Broker -> 
 
 本契約はプロトコル別の契約であり、業務アプリケーション別ではない。
 production、alarm、Ganttなどの業務用語はtopicにもpayloadにも現れない。
-Observationそのもののモデル（kind、series、sequence、timestamp）は[製品モデル](../concepts/product-model.md)に置き、本契約はそれをMQTTへ写す。
+Observationそのもののモデル（kind、series、sequence、2つの時刻）は[製品モデル](../concepts/product-model.md)に置き、本契約はそれをMQTTへ写す。
 
 ## 2. 識別子
 
@@ -58,13 +58,26 @@ iotkit/v1/edge-node/rpi1/observation/press-01-temperature-high/state
 
 consumerは`iotkit/v1/edge-node/+/observation/+/+`で購読し、topicの各段からedge-node-id、pipeline-id、kindを得る。
 
+### topic先行の型選択
+
+kindはpayloadの中にはない。consumerはpipeline定義を参照せず、topic末尾の`{kind-key}`でkindを先に確定してから、kindごとの固定payload型としてdecodeする。JSONを汎用の値へ一度decodeしてから判別する必要はない。
+
+```text
+iotkit/v1/edge-node/+/observation/+/measurement        -> value: JSON number
+iotkit/v1/edge-node/+/observation/+/state              -> value: boolean
+iotkit/v1/edge-node/+/observation/+/accumulated-count  -> value: 0以上の整数
+```
+
+kindごとに別のtopic filterで購読すれば、受信callbackごとに型が固定される。1つのfilterで購読する場合は、topicの末尾で分岐してから同じ固定型を使う。
+
 ## 4. Observation payload
 
 ```json
 {
   "series_id": "018f5f83-7a2b-7c61-a729-6af238f558e0",
   "sequence": 42,
-  "timestamp": 1784190000123,
+  "uptime_ms": 8123456,
+  "unix_epoch_ms": 1784190000123,
   "value": 1250
 }
 ```
@@ -73,8 +86,11 @@ consumerは`iotkit/v1/edge-node/+/observation/+/+`で購読し、topicの各段�
 |---|---|---|
 | `series_id` | 文字列（UTF-8で1〜64バイト） | 同じpipeline出力の連続した世代。等価比較にだけ使う不透明な文字列で、UUIDであることやversionをconsumerは検証しない |
 | `sequence` | 整数（1以上、2^53−1以下） | series内で1から始まり、公開ごとに1増える。再送では増えない |
-| `timestamp` | 整数（Unix epoch ms） | その出力を確定させた入力をIoTKitが受信した実時刻。debounceで確定した場合はdebounceを満了させた入力の受信時刻 |
+| `uptime_ms` | 整数（0以上） | IoTKitが動く端末（OS）の起動から、その出力を確定させた入力を受信するまでの経過ms。単調時計から取る。常に置く |
+| `unix_epoch_ms` | 整数（Unix epoch ms）または`null` | その入力を受信した実時刻。IoTKitが自分の時計を信頼できるときだけ整数、それ以外は`null`。keyは常に置く |
 | `value` | kindによる | 下表 |
+
+debounceで確定した出力は、debounceを満了させた入力の受信時刻を両方の時刻に使う。
 
 | kind-key | `value` | 補足 |
 |---|---|---|
@@ -82,12 +98,27 @@ consumerは`iotkit/v1/edge-node/+/observation/+/+`で購読し、topicの各段�
 | `accumulated-count` | 0以上の整数（2^53−1以下） | pipelineが算出した累積値。series内で単調に増える |
 | `state` | boolean | 二値化、ヒステリシス、デバウンス後の現在状態 |
 
-fieldはこの4つだけであり、他のfieldは追加しない。
-IoTKitはpayloadを、この順のkeyを持つ空白なしのJSON（`{"series_id":…,"sequence":…,"timestamp":…,"value":…}`）として送る。producerのconformance testはこのbytesをfixtureと比較する。
+fieldはこの5つだけであり、他のfieldは追加しない。
+IoTKitはpayloadを、この順のkeyを持つ空白なしのJSON（`{"series_id":…,"sequence":…,"uptime_ms":…,"unix_epoch_ms":…,"value":…}`）として送る。producerのconformance testはこのbytesをfixtureと比較する。
 consumerはpayloadをJSONとして解釈し、keyの順序や空白に依存しない。
 
-`sequence`は単調だが、`timestamp`は端末の時計補正で逆行することがある。順序の判定と重複排除には`sequence`を使う。
-端末はNTP同期を必須とする。
+### 2つの時計
+
+IoTKitは単調時計と実時計を区別し、それぞれが保証できることだけを約束する。
+
+| | `uptime_ms`（単調時計） | `unix_epoch_ms`（実時計） |
+|---|---|---|
+| 保証すること | 端末が起動している間は単調かつ連続。IoTKitプロセスの再起動でも途切れない。2つのObservationの`uptime_ms`の差は、その間の実際の経過時間に等しい | 整数のときは、NTP同期などによりIoTKitが信頼できると判断した実時刻 |
+| 保証しないこと | 端末の再起動（reboot）でゼロに戻る。別の端末やconsumerの時計と直接は比べられない | RTCのない端末の起動直後や、NTPに届かない現場では`null`が続く。同期時に飛ぶことがある |
+
+consumerは次のように使う。
+
+- 順序の判定と重複排除は`sequence`。時刻は使わない。
+- 2つのObservationの間の幅（サイクル時間、欠測区間の長さ）は、同じ起動の中の`uptime_ms`の差。`uptime_ms`が前のObservationより減ったら端末が再起動した合図であり、その境界を跨ぐ幅は計算しない。再起動はseriesを変えない。
+- カレンダーへの割り付けは`unix_epoch_ms`。`null`のときは、consumerが「届いたメッセージの自分の受信時刻 − その`uptime_ms`」で起動ごとの基準を1つ作れば、同じ起動のObservation（Broker停止中にoutboxへ溜まり、再接続後にまとめて届いたものを含む）を割り付けられる。端末の再起動より前に溜まったObservationが実時計なしで届いた場合は、幅は分かるがカレンダーには置けない。
+- `null`をエラーとして扱わない。`unix_epoch_ms`が`null`から整数に変わるのは、端末の時計が信頼できるようになったという情報である。
+
+端末はNTP同期を推奨し、同期できる現場では導入時に確認する。同期できない現場でも、`uptime_ms`による幅の計測は成り立つ。
 
 ### 公開の頻度
 
@@ -124,10 +155,13 @@ payload：
 
 ```json
 {
-  "timestamp": 1784190000123,
+  "uptime_ms": 8123456,
+  "unix_epoch_ms": 1784190000123,
   "value": "online"
 }
 ```
+
+`uptime_ms`と`unix_epoch_ms`の意味はObservationと同じ（4節）。heartbeatの`uptime_ms`は端末の連続稼働時間そのものである。
 
 `value`は次の3値。
 
@@ -139,12 +173,13 @@ payload：
 
 - heartbeatは定期的に公開する`online`または`degraded`である。接続確立の直後に即時公開し、以後は`heartbeat_interval`（既定60秒、5秒〜1時間）ごとにQoS 1、retain有効で公開する。
 - `online`と`degraded`の切り替わりはheartbeatの間隔を待たずに即時公開する。
-- 正常終了時、IoTKitは時刻付きの`offline`をQoS 1、retain有効で公開し、PUBACKを最大2秒待って切断する。
-- 異常切断時はMQTTのWill（QoS 1、retain有効）によりBrokerが次を公開する。`timestamp`が`null`なのは、IoTKit自身が切断時刻を観測していないためである。
+- 正常終了時、IoTKitは`uptime_ms`と（信頼できれば）`unix_epoch_ms`を持つ`offline`をQoS 1、retain有効で公開し、PUBACKを最大2秒待って切断する。
+- 異常切断時はMQTTのWill（QoS 1、retain有効）によりBrokerが次を公開する。Willは接続時に登録されるため、IoTKit自身は切断の時刻も経過時間も観測しておらず、両方が`null`になる。
 
 ```json
 {
-  "timestamp": null,
+  "uptime_ms": null,
+  "unix_epoch_ms": null,
   "value": "offline"
 }
 ```
@@ -164,7 +199,8 @@ Brokerはそのtopicのretain値を消し、以後に購読するconsumerには�
 - 同じseriesの中で`accumulated-count`が減った場合は異常として扱い、黙って基準値を置き換えない。
 - 長さ0のpayloadをpipelineの削除として扱う（8節）。
 - `degraded`の区間を欠測として記録し、`offline`と区別する（7節）。
-- heartbeatの`timestamp`と受信時刻の差から、端末の時計のずれを検出できる。時刻差だけを理由にObservationを破棄しない。
+- heartbeatの`unix_epoch_ms`が整数なら、受信時刻との差から端末の時計のずれを検出できる。`null`の間は検出できない。時刻差だけを理由にObservationを破棄しない。
+- kindはtopicの末尾で確定し、pipeline定義を参照せずにpayloadをdecodeする（3節）。
 
 ## 10. 契約の成果物
 

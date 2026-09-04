@@ -164,9 +164,9 @@ stage="checking the Will payload as the Broker would publish it"
 will_file="$fixture_dir/status-offline-will.json"
 status_topic=$(field "$will_file" topic)
 publish_fixture "$fixture_dir/status-online.json"
-# Simulate the Broker acting on the Will: same topic, retain, null timestamp.
+# Simulate the Broker acting on the Will: same topic, retain, null uptime_ms and unix_epoch_ms.
 publish_fixture "$will_file"
-check "will: retained status is offline with a null timestamp" \
+check "will: retained status is offline with null times" \
   "$(printf '%s\t1\t%s' "$status_topic" "$(payload_hex "$will_file")")" \
   "$(receive_retained "$status_topic")"
 
