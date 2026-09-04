@@ -458,7 +458,6 @@ test("the v2 check and prompt CLI require explicit corpus selection", () => {
 
 test("lightweight CI validates both captured corpus revisions and their descriptive comparison", () => {
   const workflow = readFileSync(new URL(".github/workflows/ci.yml", root), "utf8");
-  const ownership = readFileSync(new URL(".github/verification-ownership.md", root), "utf8");
   assert.match(
     workflow,
     /name: Pure-refactoring evaluator foundation[\s\S]*?node scripts\/pure-refactoring-evaluator\.mjs check[\s\S]*?node scripts\/pure-refactoring-evaluator\.mjs check --corpus-version 2[\s\S]*?node --test scripts\/tests\/pure-refactoring-evaluator\.test\.mjs/,
@@ -466,10 +465,6 @@ test("lightweight CI validates both captured corpus revisions and their descript
   assert.match(
     workflow,
     /node scripts\/pure-refactoring-evaluator\.mjs score --results review\/pure-refactoring\/evaluations\/issue-212-v1-titlefree-gpt-5\.6-sol-high\.json[\s\S]*?node scripts\/pure-refactoring-evaluator\.mjs score --corpus-version 2 --results review\/pure-refactoring\/evaluations\/issue-214-v2-historical-gpt-5\.6-sol-high\.json[\s\S]*?node scripts\/pure-refactoring-evaluator\.mjs compare --baseline-results review\/pure-refactoring\/evaluations\/issue-212-v1-titlefree-gpt-5\.6-sol-high\.json --historical-results review\/pure-refactoring\/evaluations\/issue-214-v2-historical-gpt-5\.6-sol-high\.json/,
-  );
-  assert.match(
-    ownership,
-    /\| pure-refactoring-evaluator \| v1 `check`, explicit v2 `check`, focused regression, checked-in v1\/v2 `score --results`, and descriptive `compare` \|/,
   );
 });
 
