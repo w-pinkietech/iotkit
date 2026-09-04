@@ -243,9 +243,7 @@ fn decode_value(json: &str) -> Option<ObservationValue> {
         serde_json::Value::Bool(value) => Some(ObservationValue::State(value)),
         // Only measurement needs the last published value (change detection);
         // accumulated-count reads its current value from `counter`.
-        serde_json::Value::Number(number) => {
-            number.as_f64().map(ObservationValue::Measurement)
-        }
+        serde_json::Value::Number(number) => number.as_f64().map(ObservationValue::Measurement),
         _ => None,
     }
 }

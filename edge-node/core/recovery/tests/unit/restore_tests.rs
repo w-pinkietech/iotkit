@@ -605,8 +605,12 @@ struct RestoreFixture {
 
 #[cfg(target_os = "linux")]
 fn restore_fixture() -> RestoreFixture {
-    restore_fixture_with_schema(24)
+    restore_fixture_with_schema(LATEST_SCHEMA_VERSION)
 }
+
+/// The last version of `all_edge_node_migrations()`; pipeline tables (v25)
+/// were added after the recovery schema (v23, v24).
+const LATEST_SCHEMA_VERSION: u32 = 25;
 
 #[cfg(target_os = "linux")]
 fn restore_fixture_with_schema(schema_version: u32) -> RestoreFixture {
@@ -627,7 +631,11 @@ fn restore_fixture_with_schema(schema_version: u32) -> RestoreFixture {
     if schema_version == 23 {
         source
             .execute_batch(
-                "DROP TRIGGER edge_node_recovery_activation_immutable_delete;
+                "DROP TABLE observation_outbox;
+                 DROP TABLE pipeline_state;
+                 DROP TABLE pipeline_definition;
+                 DELETE FROM _schema_version WHERE version=25;
+                 DROP TRIGGER edge_node_recovery_activation_immutable_delete;
                  DROP TRIGGER edge_node_recovery_activation_insert_state;
                  DROP TRIGGER edge_node_recovery_activation_forward_only;
                  DROP TABLE edge_node_recovery_activation;
@@ -635,7 +643,7 @@ fn restore_fixture_with_schema(schema_version: u32) -> RestoreFixture {
             )
             .unwrap();
     } else {
-        assert_eq!(schema_version, 24);
+        assert_eq!(schema_version, LATEST_SCHEMA_VERSION);
     }
     drop(source);
     let backup_id = "backup-restore-negative";
@@ -676,7 +684,7 @@ fn restore_fixture_with_schema(schema_version: u32) -> RestoreFixture {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn v23_encrypted_backup_restores_and_migrates_the_fenced_candidate_to_v24() {
+fn v23_encrypted_backup_restores_and_migrates_the_fenced_candidate_to_the_latest_schema() {
     let fixture = restore_fixture_with_schema(23);
     let receipt = restore_candidate(&fixture.request, &restore_passphrase()).unwrap();
     assert_eq!(receipt.schema_version, 2);
@@ -685,12 +693,12 @@ fn v23_encrypted_backup_restores_and_migrates_the_fenced_candidate_to_v24() {
     assert_eq!(
         candidate
             .query_row(
-                "SELECT count(*) FROM _schema_version WHERE version=24",
+                "SELECT count(*) FROM _schema_version WHERE version IN (24, 25)",
                 [],
                 |row| row.get::<_, i64>(0),
             )
             .unwrap(),
-        1
+        2
     );
     assert!(matches!(
         startup_mode(&candidate).unwrap(),

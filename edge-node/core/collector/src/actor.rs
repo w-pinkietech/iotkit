@@ -1,4 +1,5 @@
 use crate::freshness::{FreshnessClock, FreshnessLimits, FreshnessSnapshot, UntrustedSystemClock};
+use crate::pipelines::PipelineDelivery;
 use crate::principal::DevicePrincipalIssuer;
 use crate::principal::IngestPrincipal;
 use crate::principal::LocalPrincipalIssuer;
@@ -97,13 +98,23 @@ impl Collector {
         db: DbHandle,
         policy: Arc<dyn RegistryPolicy>,
         queue_cap: usize,
+        pipelines: Option<Arc<PipelineDelivery>>,
     ) -> (
         Collector,
         LocalPrincipalIssuer,
         DevicePrincipalIssuer,
         tokio::task::JoinHandle<()>,
     ) {
-        let (collector, handle) = Self::spawn(db, policy, queue_cap);
+        let (collector, handle) = Self::spawn_with_components(
+            db,
+            policy,
+            queue_cap,
+            DEFAULT_PURGE_INTERVAL_MS,
+            Arc::new(UntrustedSystemClock),
+            FreshnessLimits::default(),
+            None,
+            pipelines,
+        );
         (
             collector,
             LocalPrincipalIssuer::new(),
@@ -152,6 +163,7 @@ impl Collector {
             Arc::new(UntrustedSystemClock),
             FreshnessLimits::default(),
             None,
+            None,
         )
     }
 
@@ -171,12 +183,14 @@ impl Collector {
             Arc::new(UntrustedSystemClock),
             FreshnessLimits::default(),
             None,
+            None,
         )
     }
 
     /// Construct the collector with receiver-owned clock evidence and an optional
     /// bounded intrusion channel. The channel is written only with `try_send`, so
     /// a saturated security sink cannot block custody processing.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_with_components(
         db: DbHandle,
         policy: Arc<dyn RegistryPolicy>,
@@ -185,6 +199,7 @@ impl Collector {
         freshness_clock: Arc<dyn FreshnessClock>,
         freshness_limits: FreshnessLimits,
         intrusion_tx: Option<mpsc::Sender<IntrusionSignal>>,
+        pipelines: Option<Arc<PipelineDelivery>>,
     ) -> (Collector, tokio::task::JoinHandle<()>) {
         let (tx, mut rx) = mpsc::channel::<QueuedRequest>(queue_cap);
         let handle = tokio::spawn(async move {
@@ -199,6 +214,7 @@ impl Collector {
                 let purge_after_success = commit;
                 let freshness_clock = Arc::clone(&freshness_clock);
                 let intrusion_tx = intrusion_tx.clone();
+                let pipelines = pipelines.clone();
                 let result = db
                     .with_conn(move |conn| {
                         let mut c = taken;
@@ -209,6 +225,7 @@ impl Collector {
                             freshness_clock.as_ref(),
                             freshness_limits,
                             intrusion_tx.as_ref(),
+                            pipelines.as_deref(),
                             &request,
                             commit,
                         );
@@ -471,6 +488,7 @@ fn process_envelope_mode(
     freshness_clock: &dyn FreshnessClock,
     freshness_limits: FreshnessLimits,
     intrusion_tx: Option<&mpsc::Sender<IntrusionSignal>>,
+    pipelines: Option<&PipelineDelivery>,
     request: &IngestRequest,
     commit: bool,
 ) -> Result<EnvelopeAck, ProcessError> {
@@ -547,6 +565,7 @@ fn process_envelope_mode(
         clock,
         freshness_limits,
         intrusion_tx,
+        pipelines,
         epoch: &epoch,
     };
     let mut item_statuses = Vec::with_capacity(envelope.items.len());
@@ -738,6 +757,7 @@ struct ItemContext<'a> {
     clock: FreshnessSnapshot,
     freshness_limits: FreshnessLimits,
     intrusion_tx: Option<&'a mpsc::Sender<IntrusionSignal>>,
+    pipelines: Option<&'a PipelineDelivery>,
     epoch: &'a str,
 }
 
@@ -957,6 +977,11 @@ fn process_item(
         quarantined: row_quarantined,
     };
     let seq = ts::insert_reading_v3(conn, &new).map_err(|e| e.to_string())?;
+    // Device-local pipelines see every durable reading in the same transaction
+    // (#232). Quarantined readings are not observations.
+    if !row_quarantined && let Some(pipelines) = context.pipelines {
+        pipelines.deliver(conn, principal, item, context.received_at)?;
+    }
     if !row_quarantined
         && iotkit_core_publish::activation::publication_admitted(conn).map_err(|e| e.to_string())?
     {

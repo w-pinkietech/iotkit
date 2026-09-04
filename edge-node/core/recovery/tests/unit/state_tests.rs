@@ -51,11 +51,11 @@ fn recovery_migration_defaults_to_normal_without_a_candidate_row() {
 }
 
 #[test]
-fn complete_migration_set_is_sorted_and_ends_at_recovery_version_24() {
+fn complete_migration_set_is_sorted_and_ends_at_the_pipeline_version_25() {
     let migrations = all_edge_node_migrations();
     assert_eq!(
         migrations.last().map(|migration| migration.version),
-        Some(24)
+        Some(25)
     );
     assert!(
         migrations

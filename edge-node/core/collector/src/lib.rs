@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod freshness;
+pub mod pipelines;
 pub mod principal;
 pub mod registry_policy;
 
@@ -10,6 +11,7 @@ pub use freshness::{
     FreshnessClock, FreshnessLimits, FreshnessSnapshot, InvalidFreshnessLimits,
     MAX_FRESHNESS_LIMIT_MS, UntrustedSystemClock,
 };
+pub use pipelines::PipelineDelivery;
 pub use principal::{
     AuthenticatedDeviceIdentity, DeviceAuthorityProof, DevicePrincipalIssuer, IngestActorKind,
     IngestPrincipal, LocalPrincipalIssuer,

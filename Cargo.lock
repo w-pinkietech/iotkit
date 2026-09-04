@@ -1405,6 +1405,7 @@ name = "iotkit-core-collector"
 version = "0.4.0"
 dependencies = [
  "iotkit-core-ledger",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-storage",
  "iotkit-core-timeseries",
@@ -1507,6 +1508,7 @@ dependencies = [
  "getrandom 0.4.2",
  "iotkit-core-ledger",
  "iotkit-core-ops",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-registry",
  "iotkit-core-storage",
@@ -1634,6 +1636,7 @@ dependencies = [
  "iotkit-core-engine",
  "iotkit-core-ledger",
  "iotkit-core-ops",
+ "iotkit-core-pipeline",
  "iotkit-core-publish",
  "iotkit-core-recovery",
  "iotkit-core-registry",
