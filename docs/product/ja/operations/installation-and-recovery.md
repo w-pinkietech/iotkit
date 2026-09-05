@@ -5,24 +5,22 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 30
+revision: 31
 ---
 
 # IoTKit Edgeの導入と復旧
 
-> **移行中の注記（#232 子Issue 5）。** 本書が説明する中央の`iotkit-edge`、`scripts/bootstrap-edge.sh`、`deploy/compose.edge*.yaml`は#251 で削除した。暗号化backupとfenced restoreは#253 で削除し、復旧は下記「バックアップ」「復元」「端末の交換」の3点コピーに置き換えた。導入と日常確認の章の全面改訂は#250 の最終PR（5e）で行う。それまでは[試用profile](trial-profile.md)が唯一の実行可能な導入手順である。
+> **移行中の注記（#232 子Issue 5）。** 1〜6節と10節は、#251で削除した中央の
+> `iotkit-edge`、`scripts/bootstrap-edge.sh`、`deploy/compose.edge*.yaml`を説明する
+> 古い移行資料であり、現行手順ではない。11節の中央Edge向け旧更新・ロールバック手順も
+> 廃止し、#256へ先送りしている。暗号化バックアップとfenced restoreは#253で削除した。
+> 7〜9節は現在の`iotkit-edge-node`の導入と設定だけの復旧を説明する。
+> #250の最終PR（5e）までは[試用profile](trial-profile.md)が唯一の実行可能な導入手順である。
 
 一つのIoTKit Edge deploymentに対するoperatorの入口です。Router、DNS、IP払出し、firewall、VPNの設定はIoTKitの範囲外です。
 
-Rust製IoTKit Edgeは固有のfresh schemaから開始します。以前のGo実装が作成したDBと
-暗号化backup artifactは受理、変換、restoreしません。必要な業務dataはcutover前に
-exportし、clean installを行います。
-
-Release候補を現場へ持ち込む前に、既存DB・credentialを再利用せず、新しいreport directoryへhost統合gateを実行します。PostgreSQL clean install、Console、疑似Edge Node 2台、意味付け、external MQTT、restart/通信断、暗号化backup/restore、certificate rollback、両storage profileのcapacity smokeを通します。実BravePI、対象hardwareのcapacity測定、Windows+Caddy確認の代替ではありません。
-
-```bash
-scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
-```
+端末の交換・SD障害の復旧は設定だけを対象にします。障害が起きたSDのDB、SQLite WAL、
+未送信データは復元しません。失われる範囲は9節に示します。
 
 ## 1. 導入
 
@@ -115,23 +113,44 @@ Recoveryは既存sessionを失効します。Password、MQTT credential、privat
 
 ## 7. バックアップ
 
-端末の状態は次の3点である。
+導入時と設定変更のたびに、次を端末外へ手動で保管します。保護された権限で保持し、
+再配備後にIoTKitの実行ユーザーが各ファイルを読めることを確認します。
 
-- TOML（`edge-node-id`、`[output.mqtt]`、`[status]`、Input Adapterのインスタンス）
-- SQLiteファイル（pipeline定義、評価状態、累積値またはstate、series / sequence、PUBACK前のoutbox）
-- `pipelines.toml`（DBから書き出したpipeline定義のバックアップ。起動時には読まない）
+- 起動用TOML。
+- 書き出しが正常終了した最新の`pipelines.toml`。
+- TOMLが参照するMQTTパスワードファイルとCAファイル。
+- 設定済みHTTPS証明書と秘密鍵ファイル。
 
-停止した端末からこの3点をコピーして保管する。暗号化backup、snapshot CLI、fenced restoreは提供しない。
+パイプラインの書き出しはDBを元にして書き出し先へ保存します。取り込みで使う端末外の保管用ファイルは、
+その書き出し先と別にします。書き出しに失敗した場合、保管済み定義は古い可能性があります。端末外への自動バックアップはありません。
 
 ## 8. 復元
 
-停止した端末、または交換したハードウェアへ、保管した3点を同じ相対配置でコピーする。既存のSQLiteは作り直さず、コピーしたファイルを使う。pipeline定義をファイルから入れ直すときは`nodectl pipeline import`を使う。import後は全pipelineが新しいseriesで始まる。
+設定だけを復元します。起動用TOML、正常終了した最新の`pipelines.toml`、参照するMQTT/HTTPSファイルを
+保護された権限で再配備し、実行ユーザーが読めることを確認します。旧SQLite DB、そのWAL、未送信データは復元しません。
+保管したパイプラインファイルを新規DBへ読み込むときは9節の手順を使います。取り込みは全定義を置き換え、全pipelineを新しいseriesで開始します。
+`accumulated-count`の新しいseriesは`sequence = 1, value = 0`を公開します。
+`SAVED_FILE`は`--export-path`の書き出し先と別にします。
 
-端末はNTP同期を必須とする。consumerはheartbeatの`timestamp`と受信時刻の差から時計のずれを検出できる。
+NTP同期は必須ではなく推奨です。`uptime_ms`はOS起動からの経過msで、IoTKitプロセスの再起動をまたいで続きます（OS再起動でリセット）。
+`unix_epoch_ms`は常に置き、端末の時計を信頼できる場合だけ整数、それ以外は`null`です。受信側がheartbeatの実時計を比較するのは、
+`unix_epoch_ms`が`null`でない場合だけです。契約に`timestamp`項目はありません。
 
-## 9. 端末の交換
+## 9. SD障害と端末の交換
 
-ハードウェアを交換するときは、旧端末を停止し、3点を新端末へコピーして起動する。累積値とseriesの連続は、コピーしたSQLiteが届いた範囲でのみ保たれる。コピーできなかった場合は新しいseriesになる。暗号化backupや復旧権限による再稼働は使わない。
+SD障害では新規DBを使い、設定だけを復旧します。設定済みの`edge_node.id`は変えず、旧端末を停止してから交換端末を起動し、
+旧端末と交換端末を同時に動かしません。障害が起きたSDに残った旧SQLite/WALと未送信データは復元しません。停止中の測定値は利用できず、
+受信済みの履歴は受信側に残ります。すべてのpipelineは新しいseriesで開始し、`accumulated-count`は`sequence = 1, value = 0`を公開します。
+
+復旧手順は次のとおりです。
+
+1. `DB`がまだ存在しないパスを参照する設定を配備します。一時的に`[api]`の`enabled`項目と`[output.mqtt]`の`enabled`項目を`false`にします。
+2. `RUST_LOG=info iotkit-edge-node --config CONFIG`で起動し、`pipelines reconciled`を待ってIoTKit端末を停止します。
+3. `iotkit-edge-nodectl --db DB pipeline import SAVED_FILE --replace-all`を実行します。書き出し先が既定以外の場合だけ`--export-path EXPORT_DESTINATION`を追加し、
+   `SAVED_FILE`とは別のパスにします。
+4. APIを使う場合はローカルの所有権とトークンを設定してから出力とAPIの設定を戻し、その後IoTKit端末を起動します。
+
+`iotkit-edge-nodectl init`だけではpipelineのedge idを記録しません。最初にIoTKit端末を起動して`pipelines reconciled`を待つ必要があります。
 
 ## 10. SQLiteからPostgreSQLへのoffline移行
 
@@ -154,14 +173,6 @@ iotkit-edge storage migrate \
 
 成功reportはprofile、Edge ID、schema、全table件数、cursor vector、全row digest、`completed: true`を含み、mode `0600`で新規作成します。旧SQLiteを残し、PostgreSQLでConsole history、pending outbox、cursor再収束を確認します。不一致・途中失敗時は移行先を使わず、空DBを再作成して再実行します。
 
-## 11. Manual updateとrollback
+## 11. 手動更新とロールバック
 
-1. 停止した端末からTOML、SQLiteファイル、`pipelines.toml`の3点をコピーして保管する。
-2. Git commit、Compose設定、image IDを記録し、credential/keyをGitへ入れない。
-3. 新versionを取得・buildし、Brokerを動かしたままEdgeだけ停止する。
-4. Schema v12では更新前の3点を保持し、導出raw-series-key backfill、raw-preview index、latest-status table、current epoch raw receiptとactive rule/route診断index、SQLite WAL増加に必要な時間と十分な空き容量を確保する。必要な有効canonical measurement envelopeをstartup migrationでbackfillするが、status tableはheartbeat historyをbackfillせず、診断indexはhistory rowをcopyしない。一方でindex構築は保持済みraw、Observation、outbox historyを読む。Migrationはschema v12を完全にcommitするかrollbackする。
-5. 新Edgeを起動する。Schema migrationはstartup transaction。
-6. HTTPS login、diagnostics、cursor再収束、pending semantic projection、pending outbox、history graph、CSVを確認する。Restart recovery完了として扱う前にqueueをdrainする。
-7. 失敗時はEdgeを停止する。旧binaryでmigration済みDBを開かず、旧commit/imageへ戻し、更新前の3点を§8と同じ手順で戻す。Identity/credentialを作り直さない。
-
-これはmanual updateです。Migration後にimageだけ戻すのはrollbackではなく、対応する更新前DBも戻します。
+この節の中央`iotkit-edge`向け更新・ロールバック手順は廃止です。ロールバック手順は#256へ先送りしています。

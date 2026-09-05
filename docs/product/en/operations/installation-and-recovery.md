@@ -5,31 +5,25 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 30
+revision: 31
 ---
 
 # IoTKit Edge installation and recovery
 
-> **Transitional note (#232 child issue 5).** The central `iotkit-edge`, `scripts/bootstrap-edge.sh`, and `deploy/compose.edge*.yaml` described here were deleted in #251. Encrypted backup and fenced restore were deleted in #253; recovery is now the three-file copy in Backup, Restore, and Device replacement below. The full rewrite of the install and daily-check chapters is the last PR of #250 (5e). Until then the [trial profile](trial-profile.md) is the only runnable installation procedure.
+> **Transitional note (#232 child issue 5).** Sections 1–6 and 10 describe the central
+> `iotkit-edge`, `scripts/bootstrap-edge.sh`, and `deploy/compose.edge*.yaml` removed
+> in #251; they remain obsolete transition material. The old central Edge update and
+> rollback recipe in section 11 is obsolete and deferred to #256. Encrypted backup
+> and fenced restore were removed in #253. Sections 7–9 describe current
+> `iotkit-edge-node` commissioning and settings-only recovery. Until the final #250
+> PR (5e), the [trial profile](trial-profile.md) is the only runnable installation
+> guide.
 
 This is the operator entry point for one IoTKit Edge deployment. IoTKit does not
 configure routers, DNS, IP address allocation, firewalls, or VPNs.
 
-The Rust IoTKit Edge starts from its own fresh schema. Databases and encrypted
-backup artifacts created by the former Go implementation are not accepted,
-converted, or restored. Export any required business data before cutover and
-perform a clean installation.
-
-Before taking a release candidate to a site, run the host integration gate into a new
-report directory without reusing any database or credential. It covers a clean PostgreSQL
-installation, Console operations, two simulated Edge Nodes, semantic configuration,
-external MQTT, restarts and outages, encrypted backup and restore, certificate rollback,
-and the capacity regression smoke for both storage profiles. It does not replace a real
-BravePI test, capacity measurements on target hardware, or Windows and Caddy verification.
-
-```bash
-scripts/test-edge-host-release-gate.sh /secure/report/iotkit-v1-YYYYMMDD
-```
+The replacement path is settings-only. Do not restore an old database, SQLite WAL, or
+unsent records from a failed SD card; section 9 states the loss boundary.
 
 ## 1. Install
 
@@ -236,23 +230,58 @@ Git.
 
 ## 7. Backup
 
-The device state is these three files.
+At commissioning and after every settings change, manually keep these items off the
+device. Use protected permissions and confirm that the IoTKit runtime user can read
+them after redeployment.
 
-- TOML (`edge-node-id`, `[output.mqtt]`, `[status]`, Input Adapter instances)
-- The SQLite file (pipeline definitions, evaluator state, accumulated value or state, series / sequence, and the pre-PUBACK outbox)
-- `pipelines.toml` (the pipeline-definition backup written from the database; it is not read at startup)
+- The boot TOML.
+- The latest `pipelines.toml` whose export completed successfully.
+- The MQTT password and CA files referenced by the TOML.
+- The configured HTTPS certificate and private-key files.
 
-Copy these three files from a stopped device and keep them. Encrypted backup, the snapshot CLI, and fenced restore are not provided.
+The pipeline export reads from the database and writes to its export destination. Keep
+the off-device saved source file used for import separate from that destination. If an
+export fails, the saved definitions may be stale. There is no automatic off-device backup.
 
 ## 8. Restore
 
-Copy the three files onto the stopped device or onto replacement hardware, keeping the same relative layout. Do not recreate the SQLite file; use the copy. To reload pipeline definitions from a file, use `nodectl pipeline import`. After import every pipeline starts a new series.
+Restore settings only. Redeploy the boot TOML, latest successful `pipelines.toml`, and
+the referenced MQTT and HTTPS files with protected permissions; verify that the runtime
+user can read them. Do not restore the old SQLite database, its WAL, or unsent records.
+To load a saved pipeline file into a fresh database, use the sequence in section 9.
+Import replaces every definition and starts a new series for every pipeline. For an
+`accumulated-count` pipeline, the new series publishes `sequence = 1, value = 0`.
+Keep `SAVED_FILE` separate from any `--export-path` destination.
 
-NTP synchronization is required. A consumer can detect clock skew from the difference between a heartbeat `timestamp` and the receive time.
+NTP synchronization is recommended, not required. `uptime_ms` is elapsed milliseconds
+from OS boot and survives an IoTKit process restart (it resets on reboot). `unix_epoch_ms`
+is always present and is an integer only when the device clock is trusted; otherwise it is
+`null`. Consumers compare heartbeat wall-clock values only when `unix_epoch_ms` is non-null.
+The contract has no `timestamp` field.
 
-## 9. Device replacement
+## 9. SD failure and device replacement
 
-To replace the hardware, stop the old device, copy the three files onto the new device, and start it. Continuity of accumulated values and series holds only for what the copied SQLite contains. If the copy is unavailable, new series begin. Encrypted backup and reactivation through recovery authority are not used.
+For an SD-card failure, use a fresh database and settings-only recovery. Keep the
+configured `edge_node.id` stable, stop the old device before starting the replacement,
+and never run both at once. The old SQLite/WAL and unsent data that remained on the
+failed SD are not recovered. Measurements during downtime are unavailable; received
+history remains with the consumer. Every pipeline starts a new series; an
+`accumulated-count` pipeline starts at `sequence = 1, value = 0`.
+
+Use this recovery sequence:
+
+1. Deploy settings with `DB` pointing at an absent path. Temporarily set the `enabled` field
+   in `[api]` to `false` and the `enabled` field in `[output.mqtt]` to `false`.
+2. Start `RUST_LOG=info iotkit-edge-node --config CONFIG`, wait for `pipelines reconciled`,
+   and stop the node.
+3. Run `iotkit-edge-nodectl --db DB pipeline import SAVED_FILE --replace-all`. Add
+   `--export-path EXPORT_DESTINATION` when the export destination is custom; keep it
+   separate from `SAVED_FILE`.
+4. Restore the output and API configuration after setting fresh local ownership/tokens if
+   the API is used, then start the node.
+
+`iotkit-edge-nodectl init` alone does not record the pipeline edge id; the node start and
+the `pipelines reconciled` step are required.
 
 ## 10. Offline migration from SQLite to PostgreSQL
 
@@ -294,25 +323,5 @@ PostgreSQL side; recreate an empty database and run migration again.
 
 ## 11. Manual IoTKit Edge update and rollback
 
-1. Copy the TOML, SQLite file, and `pipelines.toml` from the stopped device and keep them.
-2. Record the current Git commit, Compose configuration, and IoTKit Edge image ID. Do not put
-   credentials or private keys in Git.
-3. Fetch the new version and build the IoTKit Edge image. Keep the Broker running and stop only
-   IoTKit Edge. Edge Nodes retain unacknowledged records.
-4. For schema v12, retain the three files copied before the update and leave enough free space and time for the
-   derived raw-series-key backfill, its raw-preview index, the latest-status table, current-epoch
-   raw-receipt and active rule/route diagnostic indexes, and SQLite WAL growth. Startup backfills valid
-   canonical measurement envelopes where needed; the status table has no heartbeat-history backfill and
-   the diagnostic indexes add no copied history rows. Their builds read retained raw, observation, and
-   outbox history. The migration either commits schema v12 completely or rolls back.
-5. Start the new IoTKit Edge. Schema migrations run transactionally at startup.
-6. Verify HTTPS login, `/api/v1/system/diagnostics`, cursor reconvergence, pending semantic projection,
-   pending outbox, history graphs, and CSV. Let the queue drain before treating restart recovery as
-   complete. After the retention period, remove the old image and pre-update database hold.
-7. If startup, migration, or health verification fails, stop IoTKit Edge. Do not open a migrated
-   database with the old binary. Return to the old commit/image and restore the three files copied
-   before the update using the same procedure as section 8. Do not recreate Broker or
-   Edge Node identities or credentials.
-
-This is a manual update, not automatic update. Returning only the image after database migration is
-not rollback; restore the matching pre-update database as well.
+The old central `iotkit-edge` update and rollback recipe in this section is obsolete;
+its rollback procedure is deferred to #256.

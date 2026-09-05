@@ -73,7 +73,7 @@
       "doc_paths": [
         "operations/installation-and-recovery.md"
       ],
-      "rationale": "Edge Node replacement or three-file recovery procedure."
+      "rationale": "Edge Node replacement or settings-only recovery procedure."
     },
     {
       "id": "mqtt-output-adapter-contract",
