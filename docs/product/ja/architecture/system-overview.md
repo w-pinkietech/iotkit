@@ -5,7 +5,7 @@ description: "実行構成、dataとcustodyの流れ、code配置、concurrency�
 language: ja
 translation_key: architecture.system-overview
 status: stable
-revision: 23
+revision: 24
 ---
 
 # Architecture
@@ -103,15 +103,6 @@ Edge Nodeはprivate address client向けHTTPS APIを持ちます。State変更�
 
 IoTKit Edge側の変更も`edge/src/application/`のtyped operationを通します。HTTP、HTML、CLIはthin adapterであり、SQLへ直接writeしません。
 
-任意機能のEdge Node recovery filesystem operationでは、local rootとeffective
-ownerを一つのtrusted principalとして扱います。Config parentと保護対象の
-file/directoryはgroup/otherの全accessを拒否します。Supported configure、
-destination verification/probe、publication、retentionは、config隣接のstableな
-owner-only nonblocking lockをoperation全体で一つ保持し、二つ目のsupported callは
-`operation_busy`で失敗します。このlockはproduct code間の調整であり、同じ
-effective UIDですでに動くhostile codeから保護するsecurity boundaryではありません。
-そのcodeはfilesystem namespace保護の対象外であり、host containmentが必要です。
-
 ## 現行実装
 
 V1候補は、BravePI温度・接点入力、汎用Input Adapter/driver、複数Edge Node、標準Broker、一つのIoTKit Edge、SQLite/PostgreSQL raw store、application-level `accepted-through`、future-only semantic projection、durable Output Adapter outbox、認証付きConsole、保存済みで有効な`cumulative_counter`計測ruleごとの処理済み累積結果を示すbounded live dashboard（numeric、boolean、alarmのrule cardとruleのないsignalは省略し、有効な累積ruleが一つもない場合だけdashboard全体に設定案内を一つ表示）、範囲付きhistory graph、汎用CSVを提供します。
@@ -134,7 +125,6 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 | `edge-node/core/pipeline` | 端末内pipeline（[#232](https://github.com/w-pinkietech/iotkit/issues/232)）：定義、evaluator、series / sequence、Observationのwire形、observation outbox、`pipelines.toml`のexport / import |
 | `edge-node/core/registry` | Standard catalogとdeployment overrideのmeasurement registry |
 | `edge-node/core/ops` | Typed operation、permission、auth、dispatch、audit |
-| `edge-node/core/recovery` (`iotkit-core-recovery`) | Optional Edge Node backup/recoveryのdurable state、完全migration set、read-only startup fence probe、recovery modelのredaction境界 |
 | `edge-node/ingest/client` (`iotkit-ingest-client`) | Adapterが使うingest contract client |
 | `edge-node/input/host-api` (`iotkit-input-adapter-host-api`) | Supervision非依存の公式Adapter composition API |
 | `edge-node/input/testkit` (`iotkit-input-adapter-testkit`) | Conformance assertionとreference Adapter |
@@ -196,11 +186,7 @@ BravePIはBLE、既存iOS applicationによるpairing、transmitter管理を所�
 
 - Seriesは`UNIQUE(system_id, measurement_key, channel_index, variant)`。`system_id`はledgerだけが発行する不変UUIDv7、`hardware_id`は交換可能な物理address、`user_label`は表示だけです。Hardware交換後も同じ`system_id`で履歴を継続します。
 - `readings.seq`はbox内部の挿入順、`publication_log.pub_seq`は外部配送順です。Quarantine readingは`seq`を持ちますが、解除まで`pub_seq`を持ちません。
-- 外部record identityは`(epoch, pub_seq)`です。Slice-1のfenced-candidate
-  restoreはcandidateをcollect/publishできないため、epochをmintもactivateもしません。
-  productionでのsame-ID box swap、新epochの発行、古いconsumer cursorの扱いは、
-  後続のpermit/reconciliation contractで定義するfuture behaviorであり、出荷済みrestore
-  operationではありません。
+- 外部record identityは`(epoch, pub_seq)`です。
 
 ## Concurrency
 

@@ -1,16 +1,13 @@
 mod cmd {
-    pub mod backup;
     pub mod device_credential;
     pub mod devices;
     pub mod fingerprint;
     pub mod passphrase;
     pub mod pipeline;
     pub mod query;
-    pub mod recovery_activate;
     pub mod registry;
     pub mod replace;
     pub mod smoke;
-    pub mod snapshot;
     pub mod target;
     pub mod time;
     pub mod token;
@@ -66,14 +63,6 @@ enum Command {
     Series {
         #[command(subcommand)]
         command: SeriesCommand,
-    },
-    Snapshot {
-        #[command(subcommand)]
-        command: cmd::snapshot::SnapshotCommand,
-    },
-    Backup {
-        #[command(subcommand)]
-        command: cmd::backup::BackupCommand,
     },
     Target {
         #[command(subcommand)]
@@ -148,9 +137,6 @@ fn main() {
 
 fn run() -> AppResult<()> {
     let cli = Cli::parse();
-    if let Command::Backup { command } = cli.command {
-        return cmd::backup::run(command).map_err(|error| error.into());
-    }
     let initializing = matches!(&cli.command, Command::Init);
     let reading_identity = matches!(&cli.command, Command::Identity | Command::MqttBinding);
     let reading_smoke_status = matches!(
@@ -159,30 +145,9 @@ fn run() -> AppResult<()> {
             command: cmd::smoke::SmokeCommand::Status(_),
         }
     );
-    let restoring_snapshot = matches!(
-        &cli.command,
-        Command::Snapshot {
-            command: cmd::snapshot::SnapshotCommand::Restore(_),
-        }
-    );
-    let restore_target = match &cli.command {
-        Command::Snapshot {
-            command: cmd::snapshot::SnapshotCommand::Restore(args),
-        } => Some(args.db.clone()),
-        Command::Snapshot {
-            command: cmd::snapshot::SnapshotCommand::RestoreStatus(args),
-        } => Some(args.db.clone()),
-        _ => None,
-    };
-    let allow_missing_db = initializing
-        || matches!(
-            &cli.command,
-            Command::Snapshot {
-                command: cmd::snapshot::SnapshotCommand::Restore(args),
-            } if args.create
-        );
-    let db_path = restore_target
-        .or(cli.db)
+    let allow_missing_db = initializing;
+    let db_path = cli
+        .db
         .or_else(|| std::env::var_os("IOTKIT_DB_PATH").map(PathBuf::from));
     let Some(db_path) = db_path else {
         return Err("no database specified: pass --db or set IOTKIT_DB_PATH".into());
@@ -214,18 +179,6 @@ fn run() -> AppResult<()> {
     }
     if matches!(
         &cli.command,
-        Command::Snapshot {
-            command: cmd::snapshot::SnapshotCommand::RestoreStatus(_),
-        }
-    ) {
-        let conn = rusqlite::Connection::open_with_flags(
-            &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
-        return cmd::snapshot::run_restore_status(&conn);
-    }
-    if matches!(
-        &cli.command,
         Command::DeviceCredential {
             command: cmd::device_credential::DeviceCredentialCommand::List(_),
         }
@@ -246,45 +199,21 @@ fn run() -> AppResult<()> {
             .create_new(true)
             .open(&db_path)
             .map_err(|error| {
-                if initializing {
-                    format!(
-                        "init requires an absent database ({}): {error}",
-                        db_path.display()
-                    )
-                } else {
-                    format!(
-                        "restore --create requires an absent target created exclusively by restore ({}): {error}",
-                        db_path.display()
-                    )
-                }
+                format!(
+                    "init requires an absent database ({}): {error}",
+                    db_path.display()
+                )
             })?;
         created_target = Some(CreatedDatabaseTarget::new(db_path.clone()));
     }
 
-    // Snapshot keeps its established JSON wire shape, but it operates on the
-    // same current Edge Node schema as every other command. Opening a legacy
-    // database therefore applies the current migrations before dispatch.
-    let all_migrations = iotkit_core_recovery::all_edge_node_migrations();
+    // Opening a legacy database applies the current migrations before dispatch.
+    let all_migrations = iotkit_core_ops::all_edge_node_migrations();
 
     let db = iotkit_core_storage::init_db(&db_path, &all_migrations)?;
-    if !restoring_snapshot {
-        ensure_edge_node_id(&db)?;
-    }
-    if created_target.is_none() {
-        reconcile_database_initialization_provenance(&db, &db_path, database_existed_before_open)?;
-    }
+    ensure_edge_node_id(&db)?;
+    reconcile_database_initialization_provenance(&db, &db_path, database_existed_before_open)?;
     db.with_conn_sync(|conn| Ok(dispatch(conn, &db_path, cli.command)))??;
-    if restoring_snapshot {
-        // Restore validates that the target is pristine, so identity is minted only after the
-        // restore transaction has committed successfully.
-        ensure_edge_node_id(&db)?;
-    }
-    if created_target.is_some() {
-        // The restore transaction must validate the exclusively created database while it is
-        // pristine and establish local recovery itself. Reconcile only afterward to create a
-        // missing marker without interpreting a pre-existing marker as state in the fresh DB.
-        reconcile_database_initialization_provenance(&db, &db_path, true)?;
-    }
     if let Some(target) = created_target.as_mut() {
         target.committed = true;
     }
@@ -379,19 +308,7 @@ impl CreatedDatabaseTarget {
 
 impl Drop for CreatedDatabaseTarget {
     fn drop(&mut self) {
-        let committed_receipt = rusqlite::Connection::open_with_flags(
-            &self.path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .and_then(|conn| {
-            conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM restore_receipts WHERE id = 1)",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-        })
-        .unwrap_or(false);
-        if self.committed || committed_receipt {
+        if self.committed {
             return;
         }
         let mut paths = vec![
@@ -472,13 +389,6 @@ fn dispatch(
         Command::Series { command } => match command {
             SeriesCommand::List(args) => cmd::registry::run_series_list(conn, args),
         },
-        Command::Snapshot { command } => match command {
-            cmd::snapshot::SnapshotCommand::Export(args) => cmd::snapshot::run_export(conn, args),
-            cmd::snapshot::SnapshotCommand::Restore(args) => cmd::snapshot::run_restore(conn, args),
-            cmd::snapshot::SnapshotCommand::RestoreStatus(_) => {
-                cmd::snapshot::run_restore_status(conn)
-            }
-        },
         Command::Target { command } => {
             let real_smoke = |endpoint: &str, token: &str| -> Result<(), String> {
                 let response = reqwest::blocking::Client::new()
@@ -536,6 +446,5 @@ fn dispatch(
         },
         Command::Fingerprint => cmd::fingerprint::run_fingerprint(conn, db_path),
         Command::Health(args) => cmd::query::run_health(db_path, args),
-        Command::Backup { .. } => unreachable!("backup commands take the early route"),
     }
 }

@@ -9,10 +9,6 @@ pub enum NetworkAuthorityError {
     Unowned,
     #[error("local_recovery_required")]
     LocalRecoveryRequired,
-    #[error("restore_in_progress")]
-    RestoreInProgress,
-    #[error("reset_in_progress")]
-    ResetInProgress,
     #[error("unsafe_ingress_generation_state")]
     UnsafeIngressGeneration,
     #[error("authority_state_unknown")]
@@ -26,8 +22,6 @@ impl NetworkAuthorityError {
         match self {
             Self::Unowned => "unowned",
             Self::LocalRecoveryRequired => "local_recovery_required",
-            Self::RestoreInProgress => "restore_in_progress",
-            Self::ResetInProgress => "reset_in_progress",
             Self::UnsafeIngressGeneration => "unsafe_ingress_generation_state",
             Self::Unknown => "authority_state_unknown",
             Self::TlsNotReady => "tls_not_ready",
@@ -36,7 +30,7 @@ impl NetworkAuthorityError {
 }
 
 /// Common prerequisite for every network listener. TLS material remains listener-specific, but
-/// ownership, recovery/fences, and desired/applied generation safety are shared and fail closed.
+/// ownership and desired/applied generation safety are shared and fail closed.
 pub fn require_network_authority(
     conn: &Connection,
     data_dir: &Path,
@@ -60,7 +54,7 @@ pub fn require_network_authority(
 
 pub fn require_common_network_authority(
     conn: &Connection,
-    data_dir: &Path,
+    _data_dir: &Path,
 ) -> Result<(), NetworkAuthorityError> {
     match iotkit_core_ops::ownership_state(conn).map_err(|_| NetworkAuthorityError::Unknown)? {
         OwnershipState::Owned => {}
@@ -68,12 +62,6 @@ pub fn require_common_network_authority(
         OwnershipState::LocalRecoveryRequired => {
             return Err(NetworkAuthorityError::LocalRecoveryRequired);
         }
-    }
-    if data_dir.join("restore-in-progress").exists() {
-        return Err(NetworkAuthorityError::RestoreInProgress);
-    }
-    if data_dir.join("reset-in-progress").exists() {
-        return Err(NetworkAuthorityError::ResetInProgress);
     }
     Ok(())
 }

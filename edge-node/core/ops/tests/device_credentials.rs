@@ -649,39 +649,10 @@ fn last_used_is_throttled_and_health_is_aggregate_bounded_and_actionable() {
 }
 
 #[test]
-fn restored_local_recovery_preserves_device_authority_and_mints_existing_epoch_owner() {
+fn passphrase_reset_preserves_live_device_credentials() {
     let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
     db.with_conn_sync(|conn| {
-        let (_sid, principal) = seed_principal(conn, "restore-clear");
-        let (_id, secret) = issue_at(conn, &principal, DeviceCredentialState::Current, 1, 100);
-        let old_epoch = iotkit_core_ops::auth_epoch(conn).unwrap();
-        let new_epoch = iotkit_core_ops::new_auth_epoch().unwrap();
-        let tx =
-            rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate).unwrap();
-        iotkit_core_ops::enter_restored_local_recovery(&tx, &new_epoch).unwrap();
-        tx.commit().unwrap();
-        assert_ne!(old_epoch, iotkit_core_ops::auth_epoch(conn).unwrap());
-        assert_eq!(iotkit_core_ops::auth_epoch(conn).unwrap(), new_epoch);
-        assert_eq!(list_device_credentials(conn).unwrap().len(), 1);
-        assert_eq!(
-            iotkit_core_ops::list_device_principals(conn).unwrap().len(),
-            1
-        );
-        assert!(
-            authenticate_device(conn, &secret, &TestClock(Cell::new(101)))
-                .unwrap()
-                .is_some()
-        );
-        Ok(())
-    })
-    .unwrap();
-}
-
-#[test]
-fn passphrase_reset_and_restore_preserve_live_device_credentials_and_fence_principal_material() {
-    let db = iotkit_core_storage::init_db_memory(&all_migrations()).unwrap();
-    db.with_conn_sync(|conn| {
-        let (_sid, principal) = seed_principal(conn, "reset-restore-live");
+        let (_sid, principal) = seed_principal(conn, "reset-live");
         let (_id, secret) = issue_at(conn, &principal, DeviceCredentialState::Current, 7, 100);
         let before_reset = iotkit_core_ops::device_auth_generation(conn).unwrap();
         let hash = iotkit_core_ops::hash_passphrase("new local admin passphrase").unwrap();
@@ -697,31 +668,6 @@ fn passphrase_reset_and_restore_preserve_live_device_credentials_and_fence_princ
         assert_eq!(
             after_reset_auth.principal_material_generation(),
             iotkit_core_ops::device_auth_generation(conn).unwrap()
-        );
-
-        let before_restore = iotkit_core_ops::device_auth_generation(conn).unwrap();
-        let new_epoch = iotkit_core_ops::new_auth_epoch().unwrap();
-        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-        tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
-        iotkit_core_ops::enter_restored_local_recovery(&tx, &new_epoch).unwrap();
-        tx.commit()?;
-
-        let authenticated = authenticate_device(conn, &secret, &TestClock(Cell::new(102)))
-            .unwrap()
-            .expect("restored device credential remains live");
-        assert_eq!(authenticated.principal().principal_id(), principal);
-        assert_eq!(authenticated.principal().auth_epoch(), new_epoch);
-        assert_eq!(
-            authenticated.auth_generation(),
-            iotkit_core_ops::auth_generation(conn).unwrap()
-        );
-        assert_eq!(
-            authenticated.principal_material_generation(),
-            iotkit_core_ops::device_auth_generation(conn).unwrap()
-        );
-        assert_eq!(
-            iotkit_core_ops::device_auth_generation(conn).unwrap(),
-            before_restore + 1
         );
         Ok(())
     })

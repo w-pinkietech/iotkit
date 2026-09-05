@@ -27,7 +27,6 @@ iotkit-core-ledger = { path = "../../core/ledger" }
 iotkit-core-registry = { path = "../../core/registry" }
 iotkit-core-publish = { path = "../../core/publish" }
 iotkit-core-ops = { path = "../../core/ops" }
-iotkit-core-recovery = { path = "../../core/recovery" }
 bravepi-mainboard-adapter = { path = "../../adapters/bravepi-mainboard" }
 rpi-local-adapter = { path = "../../adapters/rpi-local" }
 trial-sample-adapter = { path = "../../adapters/trial-sample" }

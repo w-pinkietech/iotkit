@@ -1,1 +1,0 @@
-{"artifact_kind":"iotkit_edge_node_database","format_version":1,"kdf":"argon2id","salt_b64":"cHVibGljLXNhbHQtdjEhIQ","kdf_time":3,"kdf_memory_kib":65536,"kdf_parallelism":4,"cipher":"xchacha20-poly1305","nonce_prefix_b64":"cHVibGljLW5vbmNlLXYxIQ","chunk_size":262144}

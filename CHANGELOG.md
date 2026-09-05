@@ -6,6 +6,8 @@ configuration, or OKF format identifiers.
 
 ## [Unreleased]
 
+- Edge Nodeの暗号化backup、fenced restore、`iotkit-core-recovery`、`nodectl`の`snapshot` / `backup` / `restore`を削除しました。復旧はTOML、SQLiteファイル、`pipelines.toml`の3点をコピーする手順です。NTP同期は必須です。
+- Removed encrypted Edge Node backup, fenced restore, `iotkit-core-recovery`, and the `nodectl` `snapshot` / `backup` / `restore` commands. Recovery is now copying the TOML, the SQLite file, and `pipelines.toml`. NTP synchronization is required.
 - 中央のIoTKit Edge（`edge/`）、そのcustody契約と旧Output Adapter契約、中央側の統合スクリプト、compose定義を削除しました。Edge Nodeは#232 の再設計でMQTT Output Adapter契約 v1により標準MQTT Brokerへ直接公開します。
 - Removed the central IoTKit Edge (`edge/`), its custody contract and the old Output Adapter contract, the central integration scripts, and the compose definitions. Since the redesign in #232 the Edge Node publishes directly to a standard MQTT Broker under the MQTT Output Adapter contract v1.
 - 試用profileをEdge Node + Mosquittoの構成に書き換えました。管理者passwordとConsoleはなくなり、`./scripts/iotkit trial up`が3本のpipelineをimportし、`./scripts/iotkit trial watch`でObservationとstatusを表示します。`iotkit.toml`の`console_bind` / `console_port`は受け付けません。

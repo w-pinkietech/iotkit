@@ -16,7 +16,6 @@ members = [
     "edge-node/core/collector",
     "edge-node/core/registry",
     "edge-node/core/ops",
-    "edge-node/core/recovery",
     "edge-node/input/hardware/transports/rpi",
     "edge-node/adapters/bravepi-mainboard",
     "edge-node/adapters/bravepi-mainboard/codec",

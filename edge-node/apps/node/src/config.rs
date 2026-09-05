@@ -728,10 +728,10 @@ fn sibling_of_db(db_path: &str, file_name: &str) -> PathBuf {
 
 /// Parsed TOML and environment overrides before adapter/catalog resolution.
 ///
-/// The composition root uses this boundary to obtain `db_path`, probe the
-/// process-wide recovery fence, and only then resolve adapter instances and
-/// effective configuration. Keeping the raw value and source together avoids
-/// reading the config file twice or changing source precedence between phases.
+/// The composition root uses this boundary to obtain `db_path` and only then
+/// resolve adapter instances and effective configuration. Keeping the raw value
+/// and source together avoids reading the config file twice or changing source
+/// precedence between phases.
 pub struct UnresolvedConfig {
     raw: RawConfig,
     source: ConfigSource,
@@ -753,13 +753,13 @@ impl UnresolvedConfig {
     }
 }
 
-/// The config source and bytes selected before the process-wide recovery fence.
+/// The config source and bytes selected before full parsing.
 ///
-/// Only the selected file and `IOTKIT_DB_PATH` are touched in this phase.  The
+/// Only the selected file and `IOTKIT_DB_PATH` are touched in this phase. The
 /// full, strict `RawConfig` deserialization and all other environment parsing
-/// happen after the fence has been observed.  Keeping the bytes here also
-/// prevents a path replacement between the read-only probe and post-fence
-/// effective config construction from changing the selected source.
+/// happen in `load_full`. Keeping the bytes here also prevents a path
+/// replacement between the bootstrap read and effective config construction
+/// from changing the selected source.
 pub struct BootstrapConfig {
     source: ConfigSource,
     contents: Option<String>,
@@ -776,9 +776,9 @@ impl BootstrapConfig {
         Ok(&self.db_path)
     }
 
-    /// Complete strict parsing and environment application after the recovery
-    /// fence.  This consumes the bootstrap so the selected source bytes cannot
-    /// be silently reread from a mutable path.
+    /// Complete strict parsing and environment application. This consumes the
+    /// bootstrap so the selected source bytes cannot be silently reread from a
+    /// mutable path.
     pub fn load_full(self) -> Result<UnresolvedConfig, ConfigError> {
         let bootstrap_db_path = self.db_path;
         let mut raw = match self.contents.as_deref() {
@@ -844,10 +844,9 @@ fn select_config_source(
     })
 }
 
-/// Selects the config source and extracts only the database path needed by the
-/// process-wide recovery fence.  Unrelated TOML fields are deliberately kept
-/// out of this phase; strict unknown-field and adapter validation waits until
-/// `BootstrapConfig::load_full` after the fence.
+/// Selects the config source and extracts the database path. Unrelated TOML
+/// fields are deliberately kept out of this phase; strict unknown-field and
+/// adapter validation waits until `BootstrapConfig::load_full`.
 pub fn load_bootstrap(args: &[String]) -> Result<BootstrapConfig, ConfigError> {
     let (path_buf, explicit, source) = select_config_source(args)?;
     let contents = match path_buf.as_deref() {
@@ -970,10 +969,10 @@ fn extract_db_path(contents: Option<&str>) -> Result<Option<String>, ConfigError
         };
     }
 
-    // The full document is intentionally allowed to be malformed here: the
-    // recovery fence must still use a canonical database path when an
-    // unrelated table is broken.  Only exact root dotted keys and exact
-    // `[edge_node]` assignments are recognized in this fallback.
+    // The full document is intentionally allowed to be malformed here so a
+    // canonical database path is still available when an unrelated table is
+    // broken. Only exact root dotted keys and exact `[edge_node]` assignments
+    // are recognized in this fallback.
     let mut in_edge_node = false;
     let mut in_root = true;
     let mut multiline = None;

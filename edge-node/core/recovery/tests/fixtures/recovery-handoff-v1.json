@@ -1,1 +1,0 @@
-{"schema_version":1,"recovery_id":"recovery-fixture","edge_id":"edge-fixture","edge_node_id":"node-fixture","old_ledger_epoch":"epoch-old-fixture","expected_backup_id":"backup-fixture","proposed_new_epoch":"epoch-new-fixture","credential_generation":2}

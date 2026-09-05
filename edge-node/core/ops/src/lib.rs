@@ -14,8 +14,8 @@ pub mod tier;
 pub use auth::{
     IssuedToken, NewOperatorToken, OwnershipState, PassphraseAuthority, Secret, TokenRow,
     auth_epoch, auth_generation, authenticate, database_initialization_marker_path,
-    enter_restored_local_recovery, hash_passphrase, issue_session_token, issue_token, list_tokens,
-    load_passphrase_authority, load_passphrase_hash, new_auth_epoch, ownership_state,
+    hash_passphrase, issue_session_token, issue_token, list_tokens, load_passphrase_authority,
+    load_passphrase_hash, new_auth_epoch, ownership_state,
     reconcile_database_initialization_provenance, require_passphrase_authority_unchanged,
     reset_passphrase_with_hash, revoke_token, verify_passphrase,
 };
@@ -45,6 +45,27 @@ pub use ops::standard_catalog;
 pub use tier::{Actor, ActorKind, Tier, TokenKind};
 
 pub const POSITIONAL_INVENTORY_RECONCILE_OP: &str = "device.positional_inventory.reconcile";
+
+/// Returns the complete Edge Node migration set in version order.
+///
+/// Recovery migrations 23 and 24 are omitted; that crate is deleted in #253
+/// and the version gap remains until the baseline rewrite in #250 5e.
+pub fn all_edge_node_migrations() -> Vec<Migration> {
+    let mut migrations = iotkit_core_storage::MIGRATIONS.to_vec();
+    migrations.extend_from_slice(iotkit_core_ledger::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_timeseries::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_registry::MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_publish::MIGRATIONS);
+    migrations.extend_from_slice(MIGRATIONS);
+    migrations.extend_from_slice(iotkit_core_pipeline::MIGRATIONS);
+    migrations.sort_by_key(|migration| migration.version);
+    debug_assert!(
+        migrations
+            .windows(2)
+            .all(|pair| pair[0].version != pair[1].version)
+    );
+    migrations
+}
 
 pub const MIGRATIONS: &[Migration] = &[
     Migration {

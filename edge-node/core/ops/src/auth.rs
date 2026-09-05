@@ -196,49 +196,6 @@ pub fn new_auth_epoch() -> Result<String, OpsError> {
     random_prefixed("auth_", TOKEN_ID_RANDOM_BYTES)
 }
 
-pub fn enter_restored_local_recovery(
-    tx: &rusqlite::Transaction<'_>,
-    new_epoch: &str,
-) -> Result<(), OpsError> {
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON")?;
-    let prior_device_generation = crate::device_auth_generation(tx)?;
-    tx.execute("DELETE FROM admin_credential", [])?;
-    tx.execute("DELETE FROM operator_tokens", [])?;
-    tx.execute(
-        "UPDATE auth_state
-         SET auth_generation = auth_generation + 1,
-             device_credential_generation = device_credential_generation + 1,
-             auth_epoch = ?1,
-             recovery_required = 1,
-             ownership_ever_established = 1,
-             clock_evidence_source = NULL,
-             clock_evidence_at_ms = NULL,
-             manual_evidence_seq = manual_evidence_seq + 1
-         WHERE id = 1",
-        [new_epoch],
-    )?;
-    tx.execute("UPDATE device_credentials SET auth_epoch = ?1", [new_epoch])?;
-    // A restored desired enable flag is retained for operator diagnosis, but applied network
-    // authority is always fenced. Local recovery alone cannot silently reopen ingress.
-    tx.execute(
-        "UPDATE ingress_listener_config SET applied_generation=0,
-          applied_bind_addr=NULL,applied_interface=NULL,applied_local_ingress_cidrs=NULL,
-          applied_mode=NULL,applied_tls_generation=NULL,applied_tls_fingerprint=NULL,
-          last_error='restore_reapply_required',last_action='restore_fenced' WHERE id=1",
-        [],
-    )?;
-    tx.execute(
-        "UPDATE auth_state SET device_credential_generation=?1 WHERE id=1",
-        [prior_device_generation.saturating_add(1)],
-    )?;
-    record_auth_event(
-        tx,
-        "restore_authority_cleared",
-        json!({ "actor": "local_cli", "recovery": "local_recovery_required" }),
-    )?;
-    Ok(())
-}
-
 pub fn load_passphrase_hash(conn: &Connection) -> Result<Option<String>, OpsError> {
     conn.query_row(
         "SELECT passphrase_hash FROM admin_credential WHERE id = 1",

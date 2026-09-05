@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use adapter_host::{AdapterHost, AdapterHostEvent};
 use iotkit_core_engine::Engine;
-use iotkit_core_recovery::RecoveryStartupMode;
 use iotkit_core_supervision::AdapterEvent;
 use iotkit_core_types::AdapterId;
 use iotkit_edge_node::api::{ApiHandle, spawn_api_task};
@@ -60,9 +59,8 @@ fn main() {
     // R20: パニックしたタスクのbacktraceを確実にログへ残す(D1)。
     supervision::install_panic_hook();
 
-    // Register process signals before any recovery/configuration work can start
-    // a service or mutate durable state. The bare runtime only owns Tokio's
-    // signal driver here; application tasks are still behind the recovery fence.
+    // Register process signals before configuration work can start a service
+    // or mutate durable state.
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let mut shutdown_signal = match rt.block_on(async { install_shutdown_signal() }) {
         Ok(signal) => signal,
@@ -73,10 +71,8 @@ fn main() {
         }
     };
 
-    // Parse TOML and environment overrides only.  Adapter catalog validation
-    // and effective-value construction happen after the process-wide recovery
-    // fence, including for a syntactically valid config with an invalid
-    // adapter.
+    // Parse TOML and environment overrides only. Adapter catalog validation
+    // and effective-value construction happen after the bootstrap path is known.
     let bootstrap = match config::load_bootstrap(&args) {
         Ok(config) => config,
         Err(e) => {
@@ -84,30 +80,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let db_path = match bootstrap.db_path() {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to load config");
-            std::process::exit(1);
-        }
-    };
-    // Recovery state is the process-wide startup fence.  Probe with a read-only
-    // connection before catalog validation, effective-config logging, migration,
-    // identity/provenance mutation, or any application service setup.
-    match iotkit_core_recovery::probe_startup_path(Path::new(db_path)) {
-        Ok(RecoveryStartupMode::Normal | RecoveryStartupMode::Recovered { .. }) => {}
-        Ok(
-            RecoveryStartupMode::FencedCandidate { .. }
-            | RecoveryStartupMode::AwaitingCompletion { .. },
-        ) => {
-            eprintln!("fenced recovery candidate; normal runtime is disabled");
-            std::process::exit(3);
-        }
-        Err(_) => {
-            eprintln!("Edge Node recovery startup state is invalid");
-            std::process::exit(3);
-        }
-    }
     let unresolved = match bootstrap.load_full() {
         Ok(config) => config,
         Err(e) => {
@@ -167,7 +139,7 @@ fn main() {
         );
     }
 
-    let all_migrations = iotkit_core_recovery::all_edge_node_migrations();
+    let all_migrations = iotkit_core_ops::all_edge_node_migrations();
     let db_path_for_init = std::path::Path::new(&config.db_path);
     let database_existed_before_open = db_path_for_init.exists();
     if let Err(error) = iotkit_core_storage::preflight_edge_node_database(db_path_for_init) {
@@ -181,18 +153,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-    // Defense in depth: a concurrent or otherwise unexpected state change must
-    // still be observed before identity/provenance writes begin.
-    let startup_is_normal = db.with_conn_sync(|conn| {
-        Ok(matches!(
-            iotkit_core_recovery::startup_mode(conn),
-            Ok(RecoveryStartupMode::Normal | RecoveryStartupMode::Recovered { .. })
-        ))
-    });
-    if !matches!(startup_is_normal, Ok(true)) {
-        eprintln!("Edge Node recovery startup state is invalid");
-        std::process::exit(3);
-    }
     if let Err(error) = db.with_conn_sync(|conn| {
         iotkit_core_ledger::edge_node_id(conn)
             .map(|_| ())

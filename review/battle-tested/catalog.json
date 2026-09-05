@@ -106,15 +106,13 @@
       ],
       "path_prefixes": [
         "edge-node/core/ledger/",
-        "edge-node/core/recovery/",
         "edge-node/core/storage/",
         "edge-node/apps/node/src/epoch_start.rs",
         "edge-node/apps/node/src/network_authority.rs",
         "edge-node/apps/node/src/record.rs",
-        "edge-node/apps/node/tests/recovery_startup.rs",
         "edge-node/apps/nodectl/",
-        "docs/product/en/operations/edge-node-hardware-recovery.md",
-        "docs/product/ja/operations/edge-node-hardware-recovery.md"
+        "docs/product/en/operations/installation-and-recovery.md",
+        "docs/product/ja/operations/installation-and-recovery.md"
       ],
       "review_question": "If the Raspberry Pi or other Edge Node computer is lost or replaced, is every unrecoverable local record and identity transition explicit rather than silently treated as a sensor-device replacement?",
       "provenance": [
@@ -122,13 +120,10 @@
         "docs/product/en/operations/installation-and-recovery.md"
       ],
       "guards": [
-        "edge-node/apps/node/tests/recovery_startup.rs",
-        "docs/product/ja/operations/edge-node-hardware-recovery.md",
-        "docs/product/en/operations/edge-node-hardware-recovery.md",
         "docs/product/ja/operations/installation-and-recovery.md",
         "docs/product/en/operations/installation-and-recovery.md"
       ],
-      "coverage_gap": "The controlled encrypted-backup drill and clean-replacement identity test do not reproduce physical hardware loss, damaged storage, or field sensor recabling."
+      "coverage_gap": "The settings-only recovery procedure does not reproduce physical hardware loss, damaged storage, or field sensor recabling."
     },
     {
       "id": "BT-005",

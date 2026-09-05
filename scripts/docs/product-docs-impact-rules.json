@@ -67,19 +67,13 @@
     {
       "id": "edge-node-recovery",
       "path_prefixes": [
-        "edge-node/core/recovery/",
-        "scripts/fence-edge-node.sh",
-        "scripts/upgrade-edge-node-recovery-acl.sh",
-        "scripts/test-edge-node-fence.sh",
-        "scripts/test-edge-node-recovery-acl.sh",
-        "deploy/systemd/"
+        "docs/product/en/operations/installation-and-recovery.md",
+        "docs/product/ja/operations/installation-and-recovery.md"
       ],
       "doc_paths": [
-        "contracts/edge-node-recovery-v1.md",
-        "operations/edge-node-hardware-recovery.md",
         "operations/installation-and-recovery.md"
       ],
-      "rationale": "Edge Node replacement, fence, bootstrap, or recovery ACL tooling."
+      "rationale": "Edge Node replacement or settings-only recovery procedure."
     },
     {
       "id": "mqtt-output-adapter-contract",
