@@ -5,7 +5,7 @@ description: "Defines the complete installation, daily checks, certificate, acco
 language: en
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 31
+revision: 32
 ---
 
 # IoTKit Edge installation and recovery
@@ -253,11 +253,23 @@ Import replaces every definition and starts a new series for every pipeline. For
 `accumulated-count` pipeline, the new series publishes `sequence = 1, value = 0`.
 Keep `SAVED_FILE` separate from any `--export-path` destination.
 
-NTP synchronization is recommended, not required. `uptime_ms` is elapsed milliseconds
-from OS boot and survives an IoTKit process restart (it resets on reboot). `unix_epoch_ms`
-is always present and is an integer only when the device clock is trusted; otherwise it is
-`null`. Consumers compare heartbeat wall-clock values only when `unix_epoch_ms` is non-null.
-The contract has no `timestamp` field.
+**Observations, transformation, and MQTT sending continue even without NTP synchronization.
+Being unsynchronized with NTP does not block starting observation or recovery.**
+
+- `series_id` identifies a generation. `sequence` increases monotonically within a series
+  and is used for ordering and de-duplication independently of NTP; it does not guarantee
+  that no deliveries are missing.
+- `uptime_ms` is monotonic elapsed time from OS boot. Differences give measurement intervals
+  within one OS boot; a process restart does not reset it, an OS reboot does, and no interval
+  is computed across that boundary.
+- `unix_epoch_ms` is absolute date/time. The key is always present: it is an integer only
+  when the clock is trusted (for example through NTP), otherwise `null`. An unsynchronized
+  clock is not an observation error, but exact calendar time is not guaranteed in an
+  unsynchronized or otherwise untrusted environment.
+
+NTP is recommended when accurate calendar timestamps are needed. Compare heartbeat
+wall-clock values only when `unix_epoch_ms` is non-null. The contract has no `timestamp`
+field; see [section 4 of the MQTT Output Adapter contract](../contracts/mqtt-output-adapter-v1.md#4-observation-payload).
 
 ## 9. SD failure and device replacement
 

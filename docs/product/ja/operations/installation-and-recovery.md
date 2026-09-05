@@ -5,7 +5,7 @@ description: "導入、日常確認、証明書、account、backup、restore、�
 language: ja
 translation_key: operations.installation-and-recovery
 status: stable
-revision: 31
+revision: 32
 ---
 
 # IoTKit Edgeの導入と復旧
@@ -132,9 +132,14 @@ Recoveryは既存sessionを失効します。Password、MQTT credential、privat
 `accumulated-count`の新しいseriesは`sequence = 1, value = 0`を公開します。
 `SAVED_FILE`は`--export-path`の書き出し先と別にします。
 
-NTP同期は必須ではなく推奨です。`uptime_ms`はOS起動からの経過msで、IoTKitプロセスの再起動をまたいで続きます（OS再起動でリセット）。
-`unix_epoch_ms`は常に置き、端末の時計を信頼できる場合だけ整数、それ以外は`null`です。受信側がheartbeatの実時計を比較するのは、
-`unix_epoch_ms`が`null`でない場合だけです。契約に`timestamp`項目はありません。
+**NTPに同期できなくても、観測・変換・MQTT送信を継続できます。NTP未同期は観測開始や復旧の阻害条件ではありません。**
+
+- `series_id`は世代を識別します。`sequence`はseries内でNTPに依存せず単調増加し、順序付けと重複排除に使います。配送の欠落がないことは保証しません。
+- `uptime_ms`はOS起動からの単調な経過時間です。同じOS起動中は差分から測定間隔を求められます。プロセス再起動ではリセットされませんが、OS再起動ではリセットされ、この境界をまたぐ間隔は求めません。
+- `unix_epoch_ms`は絶対日時です。項目は常に置き、時計を（NTPなどで）信頼できる場合だけ整数、それ以外は`null`です。NTP未同期の`null`は観測エラーではありませんが、未同期または他の理由で信頼できない環境では正確なカレンダー時刻を保証できません。
+
+正確なカレンダー時刻が必要な場合はNTP同期を推奨します。heartbeatの実時計を比較するのは`unix_epoch_ms`が`null`でない場合だけです。契約に`timestamp`項目はありません。
+[MQTT Output Adapter契約の4節](../contracts/mqtt-output-adapter-v1.md#4-observation-payload)も参照してください。
 
 ## 9. SD障害と端末の交換
 
