@@ -685,15 +685,13 @@ async fn different_bind_publication_failure_keeps_staged_socket_inert() {
     running.stop().await;
 }
 
-fn enter_restored_local_recovery(db: &iotkit_core_storage::DbHandle) {
+fn mark_local_recovery_required(db: &iotkit_core_storage::DbHandle) {
     db.with_conn_sync(|conn| {
-        let tx =
-            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
-        let epoch = iotkit_core_ops::new_auth_epoch()
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        iotkit_core_ops::enter_restored_local_recovery(&tx, &epoch)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        Ok(tx.commit()?)
+        conn.execute(
+            "UPDATE auth_state SET recovery_required = 1 WHERE id = 1",
+            [],
+        )?;
+        Ok(())
     })
     .unwrap();
 }
@@ -817,7 +815,7 @@ async fn restored_local_recovery_drains_the_edge_ingress_listener() {
         .expect("the initial supervised listener must accept the device token");
     assert_eq!(before_ingest.status(), reqwest::StatusCode::OK);
 
-    enter_restored_local_recovery(&db);
+    mark_local_recovery_required(&db);
     wait_for_ingress_status(&health, "unbound").await;
     assert_eq!(
         health.lock().unwrap().ingress.last_error.as_deref(),
@@ -923,7 +921,7 @@ fn provision_device(db: &iotkit_core_storage::DbHandle) -> (String, String) {
 }
 
 #[test]
-fn common_gate_closes_unowned_recovery_fences_and_restored_generation_mismatch() {
+fn common_gate_closes_unowned_and_local_recovery_and_generation_mismatch() {
     let db = iotkit_core_storage::init_db_memory(&migrations()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     db.with_conn_sync(|conn| {
@@ -955,54 +953,13 @@ fn common_gate_closes_unowned_recovery_fences_and_restored_generation_mismatch()
     })
     .unwrap();
     own(&db);
-    std::fs::write(dir.path().join("restore-in-progress"), b"fence").unwrap();
-    db.with_conn_sync(|conn| {
-        assert_eq!(
-            require_network_authority(conn, dir.path()),
-            Err(NetworkAuthorityError::RestoreInProgress)
-        );
-        Ok(())
-    })
-    .unwrap();
-    std::fs::remove_file(dir.path().join("restore-in-progress")).unwrap();
-    std::fs::write(dir.path().join("reset-in-progress"), b"fence").unwrap();
-    db.with_conn_sync(|conn| {
-        assert_eq!(
-            require_network_authority(conn, dir.path()),
-            Err(NetworkAuthorityError::ResetInProgress)
-        );
-        Ok(())
-    })
-    .unwrap();
-    std::fs::remove_file(dir.path().join("reset-in-progress")).unwrap();
     db.with_conn_sync(|conn| {
         conn.execute(
             "UPDATE ingress_listener_config SET enabled=1,desired_generation=1,
-             applied_generation=1,bind_addr='192.168.1.2:8444',interface='eth0',
-             local_ingress_cidrs='[\"192.168.1.0/24\"]',mode='private_plaintext',
-             applied_bind_addr='192.168.1.2:8444',applied_interface='eth0',
-             applied_local_ingress_cidrs='[\"192.168.1.0/24\"]',
-             applied_mode='private_plaintext' WHERE id=1",
+          applied_generation=0,bind_addr='192.168.1.2:8444',interface='eth0',
+          local_ingress_cidrs='[\"192.168.1.0/24\"]',mode='private_plaintext' WHERE id=1",
             [],
         )?;
-        let tx =
-            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
-        iotkit_core_ops::enter_restored_local_recovery(
-            &tx,
-            &iotkit_core_ops::new_auth_epoch().unwrap(),
-        )
-        .unwrap();
-        tx.commit()?;
-        Ok(())
-    })
-    .unwrap();
-    own(&db);
-    db.with_conn_sync(|conn| {
-        assert!(
-            iotkit_edge_node::network_authority::require_common_network_authority(conn, dir.path())
-                .is_ok(),
-            "local recovery must restore control-plane authority even while ingress awaits reapply"
-        );
         assert_eq!(
             require_network_authority(conn, dir.path()),
             Err(NetworkAuthorityError::UnsafeIngressGeneration)

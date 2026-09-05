@@ -5,11 +5,11 @@ Choose the complete current product documentation for your language:
 - [English](product/en/index.md)
 - [Japanese](product/ja/index.md)
 
-For an Edge Node host failure or hardware replacement, start with the field
-decision guide:
+For an Edge Node host failure or hardware replacement, start with the
+installation and recovery runbook:
 
-- [English recovery quick guide](product/en/operations/edge-node-hardware-recovery.md)
-- [Japanese recovery quick guide](product/ja/operations/edge-node-hardware-recovery.md)
+- [English](product/en/operations/installation-and-recovery.md)
+- [Japanese](product/ja/operations/installation-and-recovery.md)
 
 To change the product, start with the contributor guide:
 
@@ -51,9 +51,3 @@ Documentation trees (supporting and historical rows never override product docs;
 Development process (lanes, issue/PR loop, and artifact creation criteria) lives
 in [`AGENTS.md`](../AGENTS.md); `superpowers/` stores selected process artifacts
 but does not define the process.
-
-The Edge Node encrypted backup and fenced-candidate recovery contract is paired
-across both language trees:
-
-- [English recovery contract](product/en/contracts/edge-node-recovery-v1.md)
-- [Japanese recovery contract](product/ja/contracts/edge-node-recovery-v1.md)

@@ -81,8 +81,7 @@ fixture check (`scripts/test-observation-consumer.sh`), then
 ## Old integration scripts
 
 The integration scripts of the central `iotkit-edge` were deleted with it in
-#251 (#232 child issue 5). `scripts/test-edge-node-fence.sh` and
-`scripts/test-edge-node-recovery-acl.sh` remain until the recovery crate is
-deleted in the same child issue; CI does not run them.
+#251 (#232 child issue 5). Encrypted backup, fenced restore, and the fence/ACL
+scripts were deleted in #253.
 
 Return to [`AGENTS.md`](../AGENTS.md).

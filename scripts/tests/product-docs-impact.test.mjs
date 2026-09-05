@@ -86,14 +86,10 @@ test("pipeline core paths also hit storage-capacity (coarse lower bound)", () =>
   assert.ok(docs.includes("operations/storage-capacity.md"));
 });
 
-test("recovery and deploy paths select recovery operations docs", () => {
-  const result = selectImpact(rules, [
-    "edge-node/core/recovery/src/lib.rs",
-    "deploy/systemd/iotkit-edge-node-backup.service",
-  ]);
+test("deploy paths select installation and recovery docs", () => {
+  const result = selectImpact(rules, ["deploy/mosquitto/dev.conf"]);
   const docs = result.candidates.map((c) => c.docPath).sort();
   assert.ok(docs.includes("operations/installation-and-recovery.md"));
-  assert.ok(docs.includes("operations/edge-node-hardware-recovery.md"));
 });
 
 test("trial scripts select trial-profile only", () => {

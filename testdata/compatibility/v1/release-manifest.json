@@ -89,9 +89,7 @@
       "schema_version": 25,
       "authority": [
         "docs/product/en/contracts/compatibility-policy-v1.md",
-        "docs/product/ja/contracts/compatibility-policy-v1.md",
-        "docs/product/en/contracts/edge-node-recovery-v1.md",
-        "docs/product/ja/contracts/edge-node-recovery-v1.md"
+        "docs/product/ja/contracts/compatibility-policy-v1.md"
       ],
       "schema": [
         "edge-node/core/storage/migrations",
@@ -100,13 +98,11 @@
         "edge-node/core/publish/migrations",
         "edge-node/core/registry/migrations",
         "edge-node/core/ops/migrations",
-        "edge-node/core/recovery/migrations",
         "edge-node/core/pipeline/migrations"
       ],
       "tests": [
         "edge-node/core/storage/tests/unit/migrate_tests.rs",
         "edge-node/core/pipeline/tests/unit/engine_tests.rs",
-        "edge-node/apps/node/tests/recovery_startup.rs",
         "edge-node/apps/nodectl/tests/cli.rs"
       ]
     }

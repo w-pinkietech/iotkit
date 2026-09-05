@@ -14,7 +14,6 @@ iotkit-core-storage = { path = "../../core/storage" }
 iotkit-core-timeseries = { path = "../../core/timeseries" }
 iotkit-core-ops = { path = "../../core/ops" }
 iotkit-core-pipeline = { path = "../../core/pipeline" }
-iotkit-core-recovery = { path = "../../core/recovery" }
 iotkit-ingest-contract = { path = "../../ingest/contract" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"

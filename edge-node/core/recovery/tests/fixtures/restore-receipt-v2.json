@@ -1,1 +1,0 @@
-{"schema_version":2,"status":"durably_fenced_candidate","recovery_id":"recovery-fixture","candidate_instance_id":"candidate-fixture","backup_id":"backup-fixture","edge_id":"edge-fixture","edge_node_id":"node-fixture","old_ledger_epoch":"epoch-old-fixture","proposed_new_epoch":"epoch-new-fixture","credential_generation":2,"device_auth_generation":3}

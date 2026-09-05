@@ -51,12 +51,9 @@ fn create_gateway_database(path: &std::path::Path) {
     drop(db);
 }
 
-fn create_edge_node_database(path: &Path, include_recovery_migration: bool) {
-    let mut migrations = iotkit_core_recovery::all_edge_node_migrations();
-    if !include_recovery_migration {
-        migrations.retain(|migration| migration.version < 23);
-    }
-    let db = iotkit_core_storage::init_db(path, &migrations).unwrap();
+fn create_edge_node_database(path: &Path) {
+    let db =
+        iotkit_core_storage::init_db(path, &iotkit_core_ops::all_edge_node_migrations()).unwrap();
     db.with_conn_sync(|conn| {
         conn.execute(
             "INSERT INTO ledger_meta(key, value) VALUES
@@ -112,51 +109,44 @@ fn daemon_rejects_gateway_database_before_migration_or_other_mutation() {
 }
 
 #[test]
-fn normal_pre_recovery_and_current_databases_keep_migration_startup_behavior() {
+fn current_databases_keep_migration_startup_behavior() {
     let directory = tempfile::tempdir().unwrap();
-    for (name, include_recovery_migration) in [("pre-recovery", false), ("current", true)] {
-        let db_path = directory.path().join(format!("{name}.db"));
-        let config_path = directory.path().join(format!("{name}.toml"));
-        create_edge_node_database(&db_path, include_recovery_migration);
-        std::fs::write(
-            &config_path,
-            format!(
-                "[edge_node]\n id = \"cutover-node\"\n db_path = {:?}\n\
-                 [api]\n enabled = false\n\
-                 [output.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
-                 password_file = {:?}\n allow_insecure = true\n",
-                db_path,
-                directory.path().join(format!("{name}-missing-password")),
-            ),
+    let db_path = directory.path().join("current.db");
+    let config_path = directory.path().join("current.toml");
+    create_edge_node_database(&db_path);
+    std::fs::write(
+        &config_path,
+        format!(
+            "[edge_node]\n id = \"cutover-node\"\n db_path = {:?}\n\
+             [api]\n enabled = false\n\
+             [output.mqtt]\n enabled = true\n host = \"127.0.0.1\"\n port = 1883\n\
+             password_file = {:?}\n allow_insecure = true\n",
+            db_path,
+            directory.path().join("current-missing-password"),
+        ),
+    )
+    .unwrap();
+
+    let output = launch_node(&config_path);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "stderr={stderr}");
+    assert!(
+        stdout.contains("failed to prepare the MQTT Output Adapter")
+            || stderr.contains("failed to prepare the MQTT Output Adapter"),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    assert!(
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM _schema_version WHERE version = 25)",
+            [],
+            |row| row.get::<_, bool>(0),
         )
-        .unwrap();
-
-        let output = launch_node(&config_path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(output.status.code(), Some(1), "stderr={stderr}");
-        assert!(
-            !stderr.contains("fenced recovery candidate")
-                && !stdout.contains("fenced recovery candidate"),
-            "stdout={stdout}\nstderr={stderr}"
-        );
-        assert!(
-            stdout.contains("failed to prepare the MQTT Output Adapter")
-                || stderr.contains("failed to prepare the MQTT Output Adapter"),
-            "stdout={stdout}\nstderr={stderr}"
-        );
-
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        assert!(
-            conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM _schema_version WHERE version = 23)",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap(),
-            "{name} database did not reach the recovery migration",
-        );
-    }
+        .unwrap(),
+        "database did not reach the pipeline migration",
+    );
 }
 
 #[test]
@@ -198,16 +188,12 @@ fn missing_and_empty_databases_reach_normal_post_migration_startup() {
         let conn = Connection::open(&db_path).unwrap();
         assert!(
             conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM _schema_version WHERE version = 23)",
+                "SELECT EXISTS(SELECT 1 FROM _schema_version WHERE version = 25)",
                 [],
                 |row| row.get::<_, bool>(0),
             )
             .unwrap(),
-            "{name} database did not reach the recovery migration",
+            "{name} database did not reach the pipeline migration",
         );
-        assert!(matches!(
-            iotkit_core_recovery::startup_mode(&conn).unwrap(),
-            iotkit_core_recovery::RecoveryStartupMode::Normal
-        ));
     }
 }
