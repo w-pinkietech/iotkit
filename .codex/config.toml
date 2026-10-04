@@ -4,9 +4,9 @@
 # How Main should dispatch roles (including Superpowers plan loops):
 #   .codex/README.md
 
-# Model and reasoning settings are intentionally inherited from each
-# contributor's active session. Main may pass a per-task model only when the
-# runtime exposes its availability; otherwise it leaves the choice inherited.
+# No project-wide model or reasoning effort is pinned. Codex uses each
+# contributor's session settings unless a task or personal subagent default
+# selects another model.
 
 [agents]
 # Global multi-agent settings only. Role definitions are the standalone

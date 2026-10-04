@@ -39,11 +39,12 @@ The complex role resolves implementation details inside a settled architecture;
 Main still owns architecture and policy decisions.
 
 Project config and custom agent files deliberately omit model IDs and
-`model_reasoning_effort`. A selected role inherits the active session's model and
-reasoning settings. A contributor may set `[agents].default_subagent_model` in
-personal Codex configuration when a personal default is useful. Main supplies an
-explicit per-task model only when the runtime exposes that model's availability;
-otherwise it leaves the choice inherited from the current session.
+`model_reasoning_effort`. Codex resolves a subagent's model from an explicit
+per-task selection, then the contributor's `[agents].default_subagent_model`,
+then the active session. A contributor may set that personal default when useful.
+Main supplies an explicit per-task model only when the runtime exposes that
+model's availability; otherwise it leaves the choice to Codex's normal
+resolution.
 
 One failed `implementer` attempt may demonstrate that Main misclassified the
 task. Main must first correct the handoff using the observed failure, then may

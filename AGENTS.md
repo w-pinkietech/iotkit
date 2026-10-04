@@ -81,8 +81,8 @@ and PR content:
  independent of the Fast/Standard/Full process lane. Project agent files do not
  pin model IDs or reasoning effort: Main selects by required capability and
  supplies an explicit per-task model only when runtime availability is
- observable; otherwise the selected role inherits the active session, including
- a contributor's personal `[agents].default_subagent_model` when configured.
+ observable; otherwise Codex resolves the model from the contributor's personal
+ `[agents].default_subagent_model` when configured, then from the active session.
  Main reruns fresh acceptance verification and owns final acceptance;
  `reviewer` supplies independent findings for work that touches a public
  contract or can lose data, not for every task. Main retains read-only
