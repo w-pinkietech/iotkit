@@ -1,7 +1,7 @@
 # Codex project agents (Main orchestration)
 
-Custom subagents live in [`.codex/agents/`](agents/). Session defaults are in
-[`config.toml`](config.toml). Upstream shape:
+Custom subagents live in [`.codex/agents/`](agents/). Personal session defaults
+live in `~/.codex/config.toml`. See the upstream guide:
 [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
 These roles define the routine Codex development loop: Main **splits**
@@ -40,8 +40,8 @@ Main still owns architecture and policy decisions.
 
 Project config and custom agent files deliberately omit model IDs and
 `model_reasoning_effort`. Codex resolves a subagent's model from an explicit
-per-task selection, then the contributor's `[agents].default_subagent_model`,
-then the active session. A contributor may set that personal default when useful.
+per-task selection, then the contributor's `[agents].default_subagent_model` in
+`~/.codex/config.toml`, then the active session.
 Main supplies an explicit per-task model only when the runtime exposes that
 model's availability; otherwise it leaves the choice to Codex's normal
 resolution.
