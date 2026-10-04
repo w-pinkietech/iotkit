@@ -76,9 +76,13 @@ and PR content:
  realistic risk. See [`.agents/testing.md`](.agents/testing.md) and
  [`.agents/workflow.md`](.agents/workflow.md).
 6. **Split routine Codex development** — Fast-lane work uses the lightweight
- `implementer` (Luna) by default; Main does not implement Fast work directly.
- Route only actual context-heavy or higher-risk settled work to
- `complex_implementer`, independent of the Fast/Standard/Full process lane.
+ `implementer` by default; Main does not implement Fast work directly. Route
+ only actual context-heavy or higher-risk settled work to `complex_implementer`,
+ independent of the Fast/Standard/Full process lane. Project agent files do not
+ pin model IDs or reasoning effort: Main selects by required capability and
+ supplies an explicit per-task model only when runtime availability is
+ observable; otherwise Codex resolves the model from the contributor's personal
+ `[agents].default_subagent_model` when configured, then from the active session.
  Main reruns fresh acceptance verification and owns final acceptance;
  `reviewer` supplies independent findings for work that touches a public
  contract or can lose data, not for every task. Main retains read-only
