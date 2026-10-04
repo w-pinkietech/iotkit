@@ -1,7 +1,5 @@
 name = "complex_implementer"
 description = "Implement settled context-heavy or higher-risk tasks with focused self-checks. Main owns acceptance verification; reviewer owns independent findings."
-model = "gpt-5.6-terra"
-model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
 approval_policy = "never"
 developer_instructions = """

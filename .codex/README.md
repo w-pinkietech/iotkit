@@ -26,28 +26,35 @@ implementation-lane selection, fresh acceptance verification, final acceptance,
 worktree/branch/PR lifecycle, merge only after human approval, and **dispatch
 order**.
 
-## Implementation routing
+## Model selection and implementation routing
 
-Use `implementer` (Luna / Max) by default when the settled specification largely
-determines the result: bounded bug fixes, boilerplate, wiring, straightforward
-features, mechanical refactors, and routine focused tests.
-
-Use `complex_implementer` (Terra / Max) only when correctness materially depends
-on context or judgment that the handoff cannot fully encode, such as subtle
+Select the role by the capability the settled task needs. Use `implementer` when
+the specification largely determines the result: bounded bug fixes, boilerplate,
+wiring, straightforward features, mechanical refactors, and routine focused
+tests. Use `complex_implementer` only when correctness materially depends on
+context or judgment that the handoff cannot fully encode, such as subtle
 concurrency, difficult debugging, security- or custody-sensitive paths, public
 contract or migration work, broad refactors, or a larger realistic blast radius.
-Terra resolves difficult implementation details inside a settled architecture;
+The complex role resolves implementation details inside a settled architecture;
 Main still owns architecture and policy decisions.
 
-One failed Luna attempt may demonstrate that Main misclassified the task. Main
-must first correct the handoff using the observed failure, then may escalate to
-Terra. Do not repeat an unchanged prompt, choose a lane by prestige, or silently
-substitute another role, model, or reasoning level. If the required custom agent
-is unavailable, stop that lane and report the limitation.
+Project config and custom agent files deliberately omit model IDs and
+`model_reasoning_effort`. A selected role inherits the active session's model and
+reasoning settings. A contributor may set `[agents].default_subagent_model` in
+personal Codex configuration when a personal default is useful. Main supplies an
+explicit per-task model only when the runtime exposes that model's availability;
+otherwise it leaves the choice inherited from the current session.
+
+One failed `implementer` attempt may demonstrate that Main misclassified the
+task. Main must first correct the handoff using the observed failure, then may
+escalate to `complex_implementer`. Do not repeat an unchanged prompt, choose a
+lane by prestige, or silently substitute another role, model, or reasoning level.
+If the required custom agent is unavailable, stop that lane and report the
+limitation.
 
 Before accepting delegated work, use native spawn/details metadata when exposed
-to confirm the selected role and its configured model/reasoning. If the runtime
-does not expose a value, report it as unobserved rather than claiming verified
+to confirm the selected role and effective model/reasoning. If the runtime does
+not expose a value, report it as unobserved rather than claiming verified
 routing. A fresh task may be required after agent definitions change.
 
 Implementation-agent checks are focused self-checks, not the acceptance gate.

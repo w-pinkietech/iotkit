@@ -4,12 +4,14 @@
 # How Main should dispatch roles (including Superpowers plan loops):
 #   .codex/README.md
 
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
-review_model = "gpt-5.6-sol"
+# Model and reasoning settings are intentionally inherited from each
+# contributor's active session. Main may pass a per-task model only when the
+# runtime exposes its availability; otherwise it leaves the choice inherited.
 
 [agents]
 # Global multi-agent settings only. Role definitions are the standalone
 # agent files in .codex/agents/ (implementer, complex_implementer, reviewer).
+# A contributor may set [agents].default_subagent_model in personal Codex
+# configuration to choose a model available in that contributor's plan.
 # Do not collapse those roles into Main for multi-task Superpowers plans.
 # max_concurrent_threads_per_session = 6
