@@ -5,26 +5,29 @@ import { pathToFileURL } from 'node:url';
 const approvalDescription = 'Authorized /auto-merge comment';
 const shaPattern = /^[0-9a-f]{40}$/;
 
-// The caller supplies only trusted GitHub metadata. Ref checks and the lease
-// keep an updated or reused branch intact even if it moves after the API read.
-export async function cleanupMergedHead(event, request, deleteBranch) {
-  if (event.action !== 'closed' || event.pull_request?.merged !== true) return false;
+// Called only after the authorized /auto-merge step successfully arms native
+// auto-merge. The wait stays in that same workflow run; timeout means skip.
+export async function cleanupMergedHead(repository, number, request, deleteBranch,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository?.full_name) ||
+      !Number.isSafeInteger(number) || number < 1) throw new Error('invalid repository or PR number');
+  const repo = repository.full_name;
+  let pr;
+  // 80 waits of 15 seconds = at most 20 minutes for deferred native merge.
+  for (let attempt = 0; attempt <= 80; attempt++) {
+    pr = await request(`repos/${repo}/pulls/${number}`);
+    if (pr.merged_at || pr.state !== 'open') break;
+    if (attempt < 80) await wait(15000);
+  }
 
-  const repo = event.repository?.full_name;
-  const number = event.pull_request.number;
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ||
-      !Number.isSafeInteger(number) || number < 1) throw new Error('invalid event repository or PR number');
-
-  const pr = await request(`repos/${repo}/pulls/${number}`);
   const branch = pr.head?.ref;
   const sha = pr.head?.sha;
   if (pr.number !== number || pr.state !== 'closed' || !pr.merged_at ||
       pr.merged_by?.login !== 'github-actions[bot]' ||
-      pr.base?.ref !== event.repository.default_branch ||
-      pr.head?.repo?.full_name !== repo ||
-      pr.head.repo.id !== event.repository.id ||
-      !shaPattern.test(sha) || sha !== event.pull_request.head.sha ||
-      typeof branch !== 'string' || branch === event.repository.default_branch) return false;
+      pr.base?.ref !== repository.default_branch ||
+      pr.head?.repo?.full_name !== repo || pr.head.repo.id !== repository.id ||
+      !shaPattern.test(sha) ||
+      typeof branch !== 'string' || branch === repository.default_branch) return false;
   try {
     execFileSync('git', ['check-ref-format', `refs/heads/${branch}`], { stdio: 'ignore' });
   } catch {
@@ -41,7 +44,6 @@ export async function cleanupMergedHead(event, request, deleteBranch) {
   if (approval?.state !== 'success' || approval.description !== approvalDescription ||
       approval.creator?.login !== 'github-actions[bot]') return false;
 
-  // Require the exact authorized command as well as this workflow's status.
   let approvedComment = false;
   for (let page = 1; !approvedComment; page++) {
     const comments = await request(`repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`);
@@ -69,6 +71,7 @@ export async function cleanupMergedHead(event, request, deleteBranch) {
   }
   if (ref.object?.sha !== sha || ref.ref !== `refs/heads/${branch}`) return false;
 
+  // The explicit lease atomically rejects deletion if the remote SHA moves.
   await deleteBranch(branch, sha);
   return true;
 }
@@ -87,9 +90,10 @@ async function request(path) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-  const deleted = await cleanupMergedHead(event, request, (branch, sha) => {
+  const number = Number(process.env.PR_NUMBER);
+  const deleted = await cleanupMergedHead(event.repository, number, request, (branch, sha) => {
     execFileSync('git', ['push', `--force-with-lease=refs/heads/${branch}:${sha}`,
       'origin', `:refs/heads/${branch}`], { stdio: 'inherit' });
   });
-  console.log(deleted ? 'Deleted approved merged PR head' : 'Head branch is ineligible or changed; skipped');
+  console.log(deleted ? 'Deleted approved merged PR head' : 'Head not merged, ineligible, or changed; skipped');
 }
