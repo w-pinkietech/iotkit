@@ -8,12 +8,6 @@ on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
 
-# Share one repository/PR lock across the comment arm and synchronize disarm.
-# A later commit therefore cancels an older arm before clearing auto-merge.
-concurrency:
-  group: guarded-auto-merge-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   arm:
     name: Arm authorized PR auto-merge
@@ -25,15 +19,22 @@ jobs:
       (github.event.comment.author_association == 'OWNER' ||
        github.event.comment.author_association == 'MEMBER' ||
        github.event.comment.author_association == 'COLLABORATOR')
+    # Only an eligible command takes the PR lock. Other comments cannot cancel
+    # the in-flight wait; synchronize still cancels it through the reset job.
+    concurrency:
+      group: guarded-auto-merge-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: true
     # Native auto-merge and its per-head approval status need these scopes.
     # This trusted workflow never checks out or executes pull-request code.
     permissions:
       contents: write
       pull-requests: write
       statuses: write
+      issues: write
     runs-on: ubuntu-latest
     steps:
       - name: Arm native squash auto-merge for an eligible pull request
+        id: arm
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}
@@ -79,12 +80,34 @@ jobs:
             echo "invalid PR head oid" >&2
             exit 1
           }
+          # Capture GitHub's recognized issue links before authorizing this PR.
+          # Base64 keeps untrusted PR text out of the workflow output format.
+          issue_refs="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json closingIssuesReferences)"
+          echo "approved_issue_refs=$(printf '%s' "$issue_refs" | base64 -w0)" >> "$GITHUB_OUTPUT"
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/statuses/$head_ref_oid" \
             -f state=success \
+            -f description='Authorized /auto-merge comment' \
             -f context='human approval'
 
           gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
+          echo 'armed=true' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.arm.outputs.armed == 'true'
+        with:
+          # issue_comment github.sha is the default-branch commit before merge.
+          ref: ${{ github.sha }}
+          persist-credentials: true
+
+      - name: Wait for merge and delete the unchanged, unused head branch
+        if: steps.arm.outputs.armed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          APPROVED_ISSUE_REFS: ${{ steps.arm.outputs.approved_issue_refs }}
+        run: node scripts/cleanup-merged-head.mjs
 
   # pull_request_target runs this default-branch workflow definition. Do not
   # check out, fetch, or execute pull-request code in this trusted job.
@@ -93,6 +116,9 @@ jobs:
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.base.ref == github.event.repository.default_branch
+    concurrency:
+      group: guarded-auto-merge-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       contents: write
       pull-requests: write
