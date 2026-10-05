@@ -30,7 +30,7 @@ jobs:
       contents: write
       pull-requests: write
       statuses: write
-      issues: read
+      issues: write
     runs-on: ubuntu-latest
     steps:
       - name: Arm native squash auto-merge for an eligible pull request
@@ -80,6 +80,10 @@ jobs:
             echo "invalid PR head oid" >&2
             exit 1
           }
+          # Capture GitHub's recognized issue links before authorizing this PR.
+          # Base64 keeps untrusted PR text out of the workflow output format.
+          issue_refs="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json closingIssuesReferences)"
+          echo "approved_issue_refs=$(printf '%s' "$issue_refs" | base64 -w0)" >> "$GITHUB_OUTPUT"
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/statuses/$head_ref_oid" \
             -f state=success \
@@ -100,7 +104,9 @@ jobs:
         if: steps.arm.outputs.armed == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}
+          APPROVED_ISSUE_REFS: ${{ steps.arm.outputs.approved_issue_refs }}
         run: node scripts/cleanup-merged-head.mjs
 
   # pull_request_target runs this default-branch workflow definition. Do not
