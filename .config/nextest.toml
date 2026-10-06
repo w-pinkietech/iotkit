@@ -6,12 +6,13 @@
 # Log SLOW so outliers stay visible.
 
 [profile.default]
-# Free GHA runners are typically 2–4 cores; keep some headroom for tests that
-# spawn their own threads (tokio, FS, crypto).
-test-threads = 2
+# ubuntu-latest runners for public repositories have 4 vCPUs, and the local
+# default (.cargo/config.toml RUST_TEST_THREADS) is also 4. Tests that spawn
+# their own threads (tokio, FS, crypto) have been fine at this level locally.
+test-threads = 4
 slow-timeout = { period = "60s" }
 
 [profile.ci]
-test-threads = 2
+test-threads = 4
 slow-timeout = { period = "60s" }
 fail-fast = false
