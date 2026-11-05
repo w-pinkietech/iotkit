@@ -1,9 +1,15 @@
 # Repository language and CLI tools. Docker/Compose and native packages remain
 # host dependencies; see CONTRIBUTING.md for their installation.
+#
+# cargo-nextest is the upstream release binary. The cargo backend compiles the
+# crate, which takes about three minutes on a cold CI runner.
+[tool_alias]
+cargo-nextest = "aqua:nextest-rs/nextest/cargo-nextest"
+
 [tools]
 rust = { version = "1.98.0", components = "rustfmt,clippy" }
 node = "24"
 python = "3.14"
 jq = "1.8.2"
 sqlite = "3.53.4"
-"cargo:cargo-nextest" = "0.9.143"
+cargo-nextest = "0.9.143"

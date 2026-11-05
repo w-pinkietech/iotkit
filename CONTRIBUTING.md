@@ -60,7 +60,7 @@ that shell setup. CI uses the same `mise.toml` through `jdx/mise-action`.
 - Node.js 24 and npm for the repository checks under `scripts/`;
 - Python 3.14 for the trial launcher and the journey's payload checks;
 - `jq` 1.8.2 and SQLite 3.53.4 for scripts;
-- `cargo-nextest` 0.9.143 for Rust tests;
+- `cargo-nextest` 0.9.143 for Rust tests, installed from the upstream release binary by mise's aqua backend;
 - `pkg-config` and `libudev-dev` for Raspberry Pi transport dependencies.
 
 `mosquitto` with `mosquitto-clients` (for `scripts/test-journey.sh` and
