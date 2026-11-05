@@ -107,6 +107,9 @@ jobs:
       - name: Local Rust concurrency defaults
         run: node --test scripts/tests/rust-concurrency.test.mjs
 
+      - name: Merged PR head cleanup guard
+        run: node --test scripts/tests/cleanup-merged-head.test.mjs
+
   check:
     name: fmt / clippy / test
     runs-on: ubuntu-latest
