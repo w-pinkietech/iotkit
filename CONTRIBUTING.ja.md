@@ -56,7 +56,7 @@ repository rootで`mise install`を実行します。直接`node`、`cargo`、`n
 - `scripts/`以下のrepositoryチェック用のNode.js 24、npm
 - 試用launcherと一気通貫テストのpayload検査用のPython 3.14
 - script用のjq 1.8.2とSQLite 3.53.4
-- Rust test用の`cargo-nextest` 0.9.143
+- Rust test用の`cargo-nextest` 0.9.143（miseのaqua backendがupstreamのrelease binaryを導入する）
 - Raspberry Pi transport依存の`pkg-config`、`libudev-dev`
 
 `scripts/test-journey.sh`と`scripts/test-observation-consumer.sh`が使う`mosquitto`と

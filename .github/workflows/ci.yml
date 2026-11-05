@@ -30,6 +30,10 @@ jobs:
   lightweight:
     name: lightweight repository checks
     runs-on: ubuntu-latest
+    env:
+      # cargo metadata (release version, layer rules), plus Node and Python
+      # checks. This lane does not run nextest.
+      MISE_ENABLE_TOOLS: node,python,rust
     steps:
       - uses: actions/checkout@v7
         with:
@@ -38,6 +42,10 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           version: 2026.8.4
+          # The default cache key ignores MISE_ENABLE_TOOLS. A partial install
+          # must not be restored as a complete one. GitHub cache keys cannot
+          # contain commas, so the prefix spells the same set out.
+          cache_key_prefix: mise-v1-node-python-rust
 
       - name: Product release version consistency
         run: |
@@ -113,12 +121,16 @@ jobs:
   check:
     name: fmt / clippy / test
     runs-on: ubuntu-latest
+    env:
+      # fmt, clippy, nextest, and doctests.
+      MISE_ENABLE_TOOLS: rust,cargo-nextest
     steps:
       - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
         with:
           version: 2026.8.4
+          cache_key_prefix: mise-v1-rust-nextest
 
       # serialport (via rpi4b-transport → adapters → iotkit-edge-node) pulls
       # libudev-sys, whose build script needs libudev's pkg-config file. It's
@@ -159,12 +171,16 @@ jobs:
   journey:
     name: journey (L1 minimal loop, L2 fault injection)
     runs-on: ubuntu-latest
+    env:
+      # cargo build of the edge node, and python3 payload checks.
+      MISE_ENABLE_TOOLS: rust,python
     steps:
       - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
         with:
           version: 2026.8.4
+          cache_key_prefix: mise-v1-rust-python
 
       - name: Install system dependencies
         run: |
